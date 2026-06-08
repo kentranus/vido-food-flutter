@@ -5,6 +5,8 @@ import '../pos/order_view.dart';
 import '../pos/online_orders.dart';
 import '../pos/order_models.dart' show money;
 import '../pos/settings_screen.dart';
+import '../pos/reports_screen.dart';
+import '../pos/history_screen.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 
@@ -427,6 +429,8 @@ class _PosShellState extends State<PosShell> {
     // Faithfully-rebuilt views render for real; the rest show a placeholder.
     if (_view == 'sell') return OrderView(staff: widget.staff);
     if (_view == 'board') return OrdersBoard(ctrl: ctrl);
+    if (_view == 'reports') return const ReportsScreen();
+    if (_view == 'orders') return const HistoryScreen();
     if (_view == 'settings') {
       return SettingsScreen(key: ValueKey(_settingsTab), initialTab: _settingsTab, onEnterKiosk: widget.onEnterKiosk);
     }
