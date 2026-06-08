@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import '../api.dart';
 import '../menu.dart' hide CartLine;
+import '../pax.dart';
+import '../printer.dart';
 import '../services/staff_store.dart';
 import '../screens/pin_lock.dart';
 import '../ui/pos_theme.dart';
@@ -109,6 +112,37 @@ class _OrderViewState extends State<OrderView> {
       builder: (_) => _NoteDialog(initial: _active.note),
     );
     if (note != null) _updateActive(() => _active.note = note);
+  }
+
+  Future<void> _openPayment() async {
+    final o = _active;
+    final pay = await showDialog<Map<String, dynamic>>(
+      context: context, barrierColor: PT.c.overlay,
+      builder: (_) => _PaymentSheet(order: o),
+    );
+    if (pay == null || !mounted) return;
+    final tip = (pay['tip'] ?? 0.0) as double;
+    // Persist the completed order to the cloud (best-effort), print kitchen ticket.
+    Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
+    try {
+      await printKitchenTicket(
+        source: 'POS', number: '${o.number}', type: orderTypeOf(o.type).label,
+        items: o.items.map((l) => {
+          'qty': l.qty, 'name': l.name,
+          'mods': [if (!l.isSimple) '${l.size == 'L' ? 'Large' : 'Reg'} · ${l.sugar}% sugar · ${l.ice}% ice', ...l.toppings.map((t) => t.name)],
+          'notes': '',
+        }).toList());
+    } catch (_) {}
+    if (!mounted) return;
+    await showDialog(context: context, barrierColor: PT.c.overlay,
+        builder: (_) => _ReceiptDialog(order: o, pay: pay, storeName: Api.instance.storeName));
+    if (!mounted) return;
+    // Order done → drop it and start fresh (mirrors React removeOrder on receipt close).
+    setState(() {
+      _orders.removeWhere((x) => x.id == o.id);
+      if (_orders.isEmpty) _orders = [emptyOrder()];
+      _activeId = _orders.first.id;
+    });
   }
 
   void _setQty(CartLine l, int qty) {
@@ -468,7 +502,7 @@ class _OrderViewState extends State<OrderView> {
         ),
         const SizedBox(height: 10),
         GestureDetector(
-          onTap: o.items.isEmpty ? null : () => _soon('Payment'),
+          onTap: o.items.isEmpty ? null : _openPayment,
           child: Opacity(
             opacity: o.items.isEmpty ? 0.4 : 1,
             child: Container(
@@ -499,9 +533,6 @@ class _OrderViewState extends State<OrderView> {
           Text(v, style: TextStyle(fontSize: 14, color: vColor, fontWeight: FontWeight.w800)),
         ]),
       );
-
-  void _soon(String what) => ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$what — dựng ở bước kế (4b/4c)'), duration: const Duration(seconds: 1)));
 
   String _time(String iso) {
     final d = DateTime.tryParse(iso)?.toLocal();
@@ -737,5 +768,372 @@ class _PosDialog extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+// ============================================================================
+// PAYMENT SHEET — method select → Cash / Card(PAX) / Gift Card. Port of PaymentModal.
+// Returns a result map {method, tip, cashReceived, changeGiven, cardLast4, cardType, authCode} on success.
+// ============================================================================
+class _PaymentSheet extends StatefulWidget {
+  final Order order;
+  const _PaymentSheet({required this.order});
+  @override
+  State<_PaymentSheet> createState() => _PaymentSheetState();
+}
+
+class _PaymentSheetState extends State<_PaymentSheet> {
+  String? _method; // null=select, 'cash','card','giftcard'
+  // terminal config (for card)
+  String _termIp = '';
+  int _termPort = 10009;
+
+  @override
+  void initState() {
+    super.initState();
+    Api.instance.getSettings().then((s) {
+      final pay = Map<String, dynamic>.from(Map<String, dynamic>.from(s['settings'] ?? {})['payment'] ?? {});
+      if (mounted) setState(() { _termIp = (pay['ip'] ?? '').toString(); _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009; });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final t = widget.order.totals;
+    return _PosDialog(maxWidth: 540, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (_method == null) ...[
+        Text('Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text)),
+        Padding(padding: const EdgeInsets.only(top: 4),
+            child: Text('Order #${widget.order.number}', style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
+        _payTotalBox(c, 'Total due', t.total),
+        const SizedBox(height: 18),
+        Row(children: [
+          _payCard(c, Icons.attach_money, 'Cash', false, () => setState(() => _method = 'cash')),
+          const SizedBox(width: 10),
+          _payCard(c, Icons.credit_card, 'Card Payment', true, () => setState(() => _method = 'card')),
+          const SizedBox(width: 10),
+          _payCard(c, Icons.smartphone, 'Gift Card', false, () => setState(() => _method = 'giftcard')),
+        ]),
+      ] else if (_method == 'cash')
+        _CashFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
+      else if (_method == 'card')
+        _PaxFlow(order: widget.order, host: _termIp, port: _termPort, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
+      else
+        _GiftCardFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r)),
+    ]));
+  }
+
+  Widget _payCard(PosColors c, IconData icon, String label, bool highlight, VoidCallback onTap) => Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: highlight ? c.primary : c.card, borderRadius: BorderRadius.circular(14),
+              boxShadow: highlight ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 4))] : null,
+            ),
+            child: Column(children: [
+              Icon(icon, size: 28, color: highlight ? c.bg : c.text),
+              const SizedBox(height: 8),
+              Text(label, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: highlight ? c.bg : c.text)),
+            ]),
+          ),
+        ),
+      );
+}
+
+Widget _payTotalBox(PosColors c, String label, double total) => Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(label, style: TextStyle(fontWeight: FontWeight.w800, color: c.text)),
+        Text(money(total), style: TextStyle(fontSize: 28, color: c.primary, fontWeight: FontWeight.w900)),
+      ]),
+    );
+
+Widget _backBtn(PosColors c, VoidCallback onBack, {bool enabled = true}) => Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: enabled ? onBack : null,
+        icon: Icon(Icons.arrow_back, size: 14, color: c.textMute),
+        label: Text('Back', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w800)),
+        style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 0), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+      ),
+    );
+
+// === CASH FLOW ===
+class _CashFlow extends StatefulWidget {
+  final Order order;
+  final VoidCallback onBack;
+  final ValueChanged<Map<String, dynamic>> onDone;
+  const _CashFlow({required this.order, required this.onBack, required this.onDone});
+  @override
+  State<_CashFlow> createState() => _CashFlowState();
+}
+
+class _CashFlowState extends State<_CashFlow> {
+  final _recv = TextEditingController();
+  double get _r => double.tryParse(_recv.text) ?? 0;
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final total = widget.order.totals.total;
+    final change = (_r - total).clamp(0, double.infinity).toDouble();
+    final ok = _r >= total;
+    final quick = <int>{total.ceil(), (total / 5).ceil() * 5, (total / 10).ceil() * 10, (total / 20).ceil() * 20}
+        .where((v) => v >= total).take(4).toList()..sort();
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _backBtn(c, widget.onBack),
+      Padding(padding: const EdgeInsets.only(top: 10),
+          child: Text('💵 Cash Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
+      _payTotalBox(c, 'Total due', total),
+      const SizedBox(height: 14),
+      PField(label: 'Amount Received', child: TextField(
+        controller: _recv, keyboardType: const TextInputType.numberWithOptions(decimal: true), autofocus: true,
+        textAlign: TextAlign.right, onChanged: (_) => setState(() {}),
+        style: TextStyle(color: c.text, fontSize: 24, fontWeight: FontWeight.w800), cursorColor: c.primary,
+        decoration: InputDecoration(hintText: '0.00', filled: true, fillColor: c.card,
+          hintStyle: TextStyle(color: c.textDim),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.border)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.primary))),
+      )),
+      Row(children: [for (final a in quick) ...[Expanded(child: GestureDetector(
+        onTap: () => setState(() => _recv.text = '$a'),
+        child: Container(margin: const EdgeInsets.only(right: 6), padding: const EdgeInsets.symmetric(vertical: 8), alignment: Alignment.center,
+            decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(8)),
+            child: Text('\$$a', style: TextStyle(color: c.text, fontSize: 13, fontWeight: FontWeight.w800))),
+      ))]]),
+      const SizedBox(height: 14),
+      if (_r > 0) Container(
+        padding: const EdgeInsets.all(16), margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(color: ok ? c.primaryA : c.redA, borderRadius: BorderRadius.circular(12)),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(ok ? 'Change' : 'Short by', style: TextStyle(fontWeight: FontWeight.w800, color: ok ? c.primary : c.red)),
+          Text(money(ok ? change : total - _r), style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: ok ? c.primary : c.red)),
+        ]),
+      ),
+      PButton(const Text('Complete Sale'), expand: true,
+          onPressed: ok ? () => widget.onDone({'method': 'cash', 'cashReceived': _r, 'changeGiven': change, 'tip': 0.0}) : null),
+    ]);
+  }
+}
+
+// === GIFT CARD FLOW ===
+class _GiftCardFlow extends StatelessWidget {
+  final Order order;
+  final VoidCallback onBack;
+  final ValueChanged<Map<String, dynamic>> onDone;
+  const _GiftCardFlow({required this.order, required this.onBack, required this.onDone});
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _backBtn(c, onBack),
+      Padding(padding: const EdgeInsets.only(top: 10),
+          child: Text('Gift Card', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
+      _payTotalBox(c, 'Amount', order.totals.total),
+      const SizedBox(height: 14),
+      Text('Confirm the gift card was processed, then mark complete.', textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 18),
+      PButton(const Text('Mark as Paid'), expand: true, onPressed: () => onDone({'method': 'giftcard', 'tip': 0.0})),
+    ]);
+  }
+}
+
+// === PAX (card) FLOW ===
+class _PaxFlow extends StatefulWidget {
+  final Order order;
+  final String host;
+  final int port;
+  final VoidCallback onBack;
+  final ValueChanged<Map<String, dynamic>> onDone;
+  const _PaxFlow({required this.order, required this.host, required this.port, required this.onBack, required this.onDone});
+  @override
+  State<_PaxFlow> createState() => _PaxFlowState();
+}
+
+class _PaxFlowState extends State<_PaxFlow> {
+  bool _busy = true;
+  PaxResult? _result;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    setState(() { _busy = true; _result = null; _error = null; });
+    try {
+      final r = await Pax.sale(amount: widget.order.totals.total, host: widget.host.isEmpty ? null : widget.host,
+          port: widget.port, refNum: 'BB${widget.order.number}');
+      if (!mounted) return;
+      setState(() { _busy = false; _result = r; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _busy = false; _error = '$e'; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final t = widget.order.totals;
+    final approved = _result?.approved == true;
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _backBtn(c, widget.onBack, enabled: !_busy),
+      Padding(padding: const EdgeInsets.only(top: 10),
+          child: Text('Card Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
+      Padding(padding: const EdgeInsets.only(top: 4),
+          child: Text(widget.host.isEmpty ? 'No terminal — simulated card payment' : 'Customer is using the card terminal',
+              style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
+      _payTotalBox(c, 'Amount due', t.total),
+      if (_busy) _statusCard(c, '💳', 'Waiting for card', 'Customer: insert, tap, or swipe', animated: true),
+      if (!_busy && approved) _verifyTicket(c),
+      if (!_busy && _result != null && !approved) _declineBox(c, 'Declined', _result!.message),
+      if (!_busy && _error != null) _declineBox(c, 'Error', _error!),
+      const SizedBox(height: 12),
+      if (_busy) PButton(const Text('Cancel'), variant: PBtnVariant.ghost, expand: true, onPressed: widget.onBack)
+      else if (approved) Row(children: [
+        Expanded(child: PButton(const Text('Back'), variant: PBtnVariant.ghost, expand: true, onPressed: widget.onBack)),
+        const SizedBox(width: 10),
+        Expanded(flex: 2, child: PButton(const Text('Complete Sale'), expand: true, onPressed: () => widget.onDone({
+          'method': 'card', 'tip': 0.0,
+          'cardLast4': _result!.cardLast4, 'cardType': _result!.cardType, 'authCode': _result!.authCode,
+        }))),
+      ])
+      else PButton(const Text('Try Again'), expand: true, onPressed: _run),
+    ]);
+  }
+
+  Widget _statusCard(PosColors c, String icon, String title, String msg, {bool animated = false}) => Container(
+        margin: const EdgeInsets.symmetric(vertical: 12), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [c.yellow.withValues(alpha: 0.13), c.card])),
+        child: Column(children: [
+          Container(width: 64, height: 64, alignment: Alignment.center,
+              decoration: BoxDecoration(color: c.yellow, shape: BoxShape.circle),
+              child: Text(icon, style: const TextStyle(fontSize: 28))),
+          const SizedBox(height: 12),
+          Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: c.text)),
+          if (msg.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4),
+              child: Text(msg, textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w700))),
+        ]),
+      );
+
+  Widget _declineBox(PosColors c, String title, String msg) => Container(
+        margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: c.redA, borderRadius: BorderRadius.circular(12)),
+        child: Row(children: [
+          Icon(Icons.error_outline, color: c.red),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(title, style: TextStyle(fontWeight: FontWeight.w900, color: c.red)),
+            if (msg.isNotEmpty) Text(msg, style: TextStyle(fontSize: 12, color: c.red)),
+          ])),
+        ]),
+      );
+
+  Widget _verifyTicket(PosColors c) {
+    final o = widget.order; final t = o.totals; final r = _result!;
+    Widget row(String a, String b, {Color? color, bool bold = false}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(a, style: TextStyle(color: color ?? c.textMute, fontWeight: bold ? FontWeight.w900 : FontWeight.w700, fontSize: bold ? 16 : 13)),
+          Text(b, style: TextStyle(color: color ?? c.text, fontWeight: bold ? FontWeight.w900 : FontWeight.w800, fontSize: bold ? 16 : 13)),
+        ]));
+    Widget dashed() => Padding(padding: const EdgeInsets.symmetric(vertical: 8),
+        child: DecoratedBox(decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border))), child: const SizedBox(width: double.infinity)));
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12), padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Center(child: Text('PLEASE VERIFY TICKET', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1, color: c.text))),
+        dashed(),
+        for (final l in o.items) row('${l.qty}× ${l.name}', money(l.lineTotal)),
+        dashed(),
+        row('Subtotal', money(t.sub)),
+        if (t.discount > 0) row('Discount', '−${money(t.discount)}'),
+        row('Tax (${(ShopConfig.tax * 100).toStringAsFixed(2)}%)', money(t.tax)),
+        dashed(),
+        row('TOTAL DUE', money(t.total), color: c.primary, bold: true),
+        dashed(),
+        row('Card', '•• ${r.cardLast4}'),
+        row('Auth Code', r.authCode),
+        row('Status', r.simulated ? 'APPROVED (test) ✓' : 'APPROVED ✓', color: c.primary),
+      ]),
+    );
+  }
+}
+
+// ============================================================================
+// RECEIPT DIALOG — Sale complete. Port of ReceiptModal.
+// ============================================================================
+class _ReceiptDialog extends StatelessWidget {
+  final Order order;
+  final Map<String, dynamic> pay;
+  final String storeName;
+  const _ReceiptDialog({required this.order, required this.pay, required this.storeName});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final t = order.totals;
+    final tip = (pay['tip'] ?? 0.0) as double;
+    final grand = t.total + tip;
+    final isCard = pay['method'] == 'card';
+    final cash = (pay['cashReceived'] ?? 0.0) as double;
+    final change = (pay['changeGiven'] ?? 0.0) as double;
+    Widget row(String a, String b, {Color? color, bool bold = false}) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(a, style: TextStyle(color: color ?? c.textMute, fontWeight: bold ? FontWeight.w900 : FontWeight.w700, fontSize: bold ? 16 : 13)),
+          Text(b, style: TextStyle(color: color ?? c.text, fontWeight: bold ? FontWeight.w900 : FontWeight.w800, fontSize: bold ? 16 : 13)),
+        ]));
+    return _PosDialog(maxWidth: 440, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Center(child: Container(width: 64, height: 64, alignment: Alignment.center,
+          decoration: BoxDecoration(color: c.cyan, shape: BoxShape.circle, boxShadow: [BoxShadow(color: c.cyanD, offset: const Offset(0, 5))]),
+          child: const Text('✓', style: TextStyle(fontSize: 32, color: Colors.white, fontWeight: FontWeight.w900)))),
+      const SizedBox(height: 12),
+      Center(child: Text('Sale Complete!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: c.text))),
+      Center(child: Padding(padding: const EdgeInsets.only(top: 4),
+          child: Text('Order #${order.number}', style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w700)))),
+      const SizedBox(height: 14),
+      Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+        child: Column(children: [
+          for (final l in order.items) row('${l.qty}× ${l.name}', money(l.lineTotal)),
+          Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: DecoratedBox(
+              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border))), child: const SizedBox(width: double.infinity))),
+          row('Subtotal', money(t.sub)),
+          if (t.discount > 0) row('Discount', '−${money(t.discount)}'),
+          row('Tax', money(t.tax)),
+          if (tip > 0) row('Tip', money(tip)),
+          row('TOTAL', money(grand), color: c.primary, bold: true),
+          if (isCard) row('Card', '${pay['cardType'] ?? 'CARD'} •• ${pay['cardLast4'] ?? ''}')
+          else if (cash > 0) ...[row('Cash', money(cash)), row('Change', money(change))],
+          row('Paid', (pay['method'] ?? '').toString().toUpperCase()),
+        ]),
+      ),
+      const SizedBox(height: 14),
+      Row(children: [
+        Expanded(child: PButton(const Text('🖨️ Print'), variant: PBtnVariant.ghost, expand: true, onPressed: () async {
+          try {
+            await printReceipt(storeName: storeName.isEmpty ? 'Vido Food' : storeName, number: '${order.number}',
+              type: orderTypeOf(order.type).label,
+              items: order.items.map((l) => {'qty': l.qty, 'name': l.name, 'lineTotal': l.lineTotal}).toList(),
+              subtotal: t.sub, tax: t.tax, tip: tip, total: grand,
+              paymentMethod: (pay['method'] ?? '').toString(), cashReceived: cash, change: change);
+          } catch (_) {}
+        })),
+        const SizedBox(width: 10),
+        Expanded(child: PButton(const Text('New Order'), expand: true, onPressed: () => Navigator.of(context).pop())),
+      ]),
+    ]));
   }
 }
