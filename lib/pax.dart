@@ -91,6 +91,20 @@ class Pax {
     }
   }
 
+  /// Initialise the PosLink SDK (used as a lightweight "Test Connection").
+  /// Returns {ok, sdk}. Off-terminal → {ok:false, skipped:true}.
+  static Future<Map<String, dynamic>> init() async {
+    if (!_native) return {'ok': false, 'skipped': true};
+    try {
+      final r = await _ch.invokeMethod('init');
+      return Map<String, dynamic>.from(r as Map);
+    } on PlatformException catch (e) {
+      throw PaxException(e.message ?? 'Terminal init failed');
+    } on MissingPluginException {
+      return {'ok': false, 'skipped': true};
+    }
+  }
+
   static Future<PaxResult> _simulate(double amount, String ref) async {
     await Future.delayed(const Duration(milliseconds: 900));
     const types = ['Visa', 'Mastercard', 'Amex', 'Discover'];

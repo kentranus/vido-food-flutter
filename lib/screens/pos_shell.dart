@@ -4,6 +4,7 @@ import '../services/staff_store.dart';
 import '../pos/order_view.dart';
 import '../pos/online_orders.dart';
 import '../pos/order_models.dart' show money;
+import '../pos/settings_screen.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 
@@ -16,7 +17,8 @@ class PosShell extends StatefulWidget {
   final Staff staff;
   final VoidCallback onLogout;
   final VoidCallback onUnlink;
-  const PosShell({super.key, required this.staff, required this.onLogout, required this.onUnlink});
+  final VoidCallback onEnterKiosk;
+  const PosShell({super.key, required this.staff, required this.onLogout, required this.onUnlink, required this.onEnterKiosk});
   @override
   State<PosShell> createState() => _PosShellState();
 }
@@ -425,6 +427,9 @@ class _PosShellState extends State<PosShell> {
     // Faithfully-rebuilt views render for real; the rest show a placeholder.
     if (_view == 'sell') return OrderView(staff: widget.staff);
     if (_view == 'board') return OrdersBoard(ctrl: ctrl);
+    if (_view == 'settings') {
+      return SettingsScreen(key: ValueKey(_settingsTab), initialTab: _settingsTab, onEnterKiosk: widget.onEnterKiosk);
+    }
     // Each remaining view is rebuilt in a later step. Until then, a dark
     // placeholder keeps the shell consistent and shows what's coming.
     final label = {

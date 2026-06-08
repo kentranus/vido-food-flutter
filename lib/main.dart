@@ -10,6 +10,7 @@ import 'screens/license_lock.dart';
 import 'screens/pin_lock.dart';
 import 'screens/pos_shell.dart';
 import 'pos/online_orders.dart';
+import 'pos/settings_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,7 +124,7 @@ class _RootGateState extends State<RootGate> {
     if (preview == 'shell') {
       return PosShell(
         staff: Staff(id: 's1', name: 'Manager', role: 'manager', pin: '1234'),
-        onLogout: () {}, onUnlink: () {});
+        onLogout: () {}, onUnlink: () {}, onEnterKiosk: () {});
     }
     if (preview == 'takeover') {
       final ctrl = OnlineOrdersController();
@@ -134,6 +135,10 @@ class _RootGateState extends State<RootGate> {
       final ctrl = OnlineOrdersController()
         ..orders = [_demoOnline('preparing', 'Online'), _demoOnline('preparing', 'Kiosk'), _demoOnline('ready', 'Online'), _demoOnline('new', 'Online')];
       return Scaffold(backgroundColor: const Color(0xFF0F1419), body: SafeArea(child: OrdersBoard(ctrl: ctrl)));
+    }
+    if (preview == 'settings') {
+      return Scaffold(backgroundColor: const Color(0xFF0F1419),
+          body: SafeArea(child: SettingsScreen(initialTab: Uri.base.queryParameters['tab'] ?? 'pax', onEnterKiosk: () {})));
     }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: C.brand)));
@@ -163,6 +168,7 @@ class _RootGateState extends State<RootGate> {
       staff: _staff!,
       onLogout: () { StaffStore.current = null; setState(() => _staff = null); },
       onUnlink: _unlink,
+      onEnterKiosk: () async { await Api.instance.setDeviceMode('kiosk'); if (mounted) setState(() {}); },
     );
   }
 }
