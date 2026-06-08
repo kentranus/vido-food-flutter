@@ -3,7 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'api.dart';
-import 'orders.dart';
+import 'pos/online_orders.dart';
 
 /// FCM "new order" push so the POS rings even when the app is closed / locked.
 /// Android (google-services.json) + iOS (GoogleService-Info.plist + APNs key).

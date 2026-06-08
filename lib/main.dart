@@ -11,6 +11,9 @@ import 'screens/pin_lock.dart';
 import 'screens/pos_shell.dart';
 import 'pos/online_orders.dart';
 import 'pos/settings_screen.dart';
+import 'pos/reports_screen.dart';
+import 'pos/operations_screen.dart';
+import 'pos/history_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -142,6 +145,15 @@ class _RootGateState extends State<RootGate> {
     }
     if (preview == 'kiosk') {
       return KioskScreen(onExit: () {});
+    }
+    if (preview == 'reports') {
+      return const Scaffold(backgroundColor: Color(0xFF0F1419), body: SafeArea(child: ReportsScreen()));
+    }
+    if (preview == 'operations') {
+      return const Scaffold(backgroundColor: Color(0xFF0F1419), body: SafeArea(child: OperationsScreen()));
+    }
+    if (preview == 'history') {
+      return const Scaffold(backgroundColor: Color(0xFF0F1419), body: SafeArea(child: HistoryScreen()));
     }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: C.brand)));
