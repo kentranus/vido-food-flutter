@@ -2,10 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'theme.dart';
-import 'screens.dart' hide LicenseLockScreen;
-import 'orders.dart';
-import 'pos_sell.dart';
-import 'reports.dart';
 import 'kiosk.dart';
 import 'push.dart';
 import 'services/staff_store.dart';
@@ -13,11 +9,28 @@ import 'screens/cloud_login.dart';
 import 'screens/license_lock.dart';
 import 'screens/pin_lock.dart';
 import 'screens/pos_shell.dart';
+import 'pos/online_orders.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initPush(); // FCM (Android) — safe no-op on web/iOS
   runApp(const VidoFoodApp());
+}
+
+/// Demo online order for the ?preview= QA hook (never used in the real flow).
+OnlineOrder _demoOnline(String status, String source) {
+  final n = 1040 + status.hashCode % 50;
+  return OnlineOrder.fromJson({
+    'id': 'demo-$source-$status', 'number': '$n', 'status': status, 'source': source, 'orderType': 'PICKUP',
+    'customer': source == 'Kiosk' ? 'Walk-in' : 'Jenny Pham', 'customerPhone': source == 'Kiosk' ? '' : '(203) 555-0142',
+    'items': [
+      {'nameSnapshot': 'Brown Sugar Boba', 'quantity': 2, 'modifiers': [{'optionName': 'Large'}, {'optionName': '50% sugar'}], 'notes': 'less ice'},
+      {'nameSnapshot': 'Mango Green Tea', 'quantity': 1, 'modifiers': []},
+    ],
+    'subtotal': 19.25, 'tax': 1.68, 'tip': 2.00, 'total': 22.93,
+    'paymentStatus': source == 'Kiosk' ? 'paid' : 'authorized',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 3)).toIso8601String(),
+  });
 }
 
 class VidoFoodApp extends StatelessWidget {
@@ -112,6 +125,16 @@ class _RootGateState extends State<RootGate> {
         staff: Staff(id: 's1', name: 'Manager', role: 'manager', pin: '1234'),
         onLogout: () {}, onUnlink: () {});
     }
+    if (preview == 'takeover') {
+      final ctrl = OnlineOrdersController();
+      return Scaffold(backgroundColor: const Color(0xFF0F1419),
+          body: NewOrderTakeover(ctrl: ctrl, order: _demoOnline('new', 'Online')));
+    }
+    if (preview == 'board') {
+      final ctrl = OnlineOrdersController()
+        ..orders = [_demoOnline('preparing', 'Online'), _demoOnline('preparing', 'Kiosk'), _demoOnline('ready', 'Online'), _demoOnline('new', 'Online')];
+      return Scaffold(backgroundColor: const Color(0xFF0F1419), body: SafeArea(child: OrdersBoard(ctrl: ctrl)));
+    }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: C.brand)));
     }
@@ -144,88 +167,3 @@ class _RootGateState extends State<RootGate> {
   }
 }
 
-/// Manage home — live online orders board + full-screen new-order takeover.
-class HomeShell extends StatefulWidget {
-  final VoidCallback onUnlink;
-  final VoidCallback onEnterKiosk;
-  const HomeShell({super.key, required this.onUnlink, required this.onEnterKiosk});
-  @override
-  State<HomeShell> createState() => _HomeShellState();
-}
-
-class _HomeShellState extends State<HomeShell> {
-  final ctrl = OnlineOrdersController();
-  int _tab = 0; // 0 = Orders board, 1 = Sell (POS)
-  @override
-  void initState() {
-    super.initState();
-    const tabMap = {'orders': 0, 'sell': 1, 'reports': 2, 'more': 3};
-    _tab = tabMap[Uri.base.queryParameters['tab']] ?? 0; // preview/deep-link
-    ctrl.start();
-  }
-
-  @override
-  void dispose() { ctrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: C.panel,
-      appBar: AppBar(
-        backgroundColor: C.panel,
-        elevation: 0,
-        titleSpacing: 16,
-        title: Row(children: [
-          const BrandMark(size: 34),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(Api.instance.storeName.isEmpty ? 'Vido Food' : Api.instance.storeName,
-                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: C.ink)),
-              Text(const ['Online orders', 'Sell · counter', 'Reports', 'More'][_tab], style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: C.textMute)),
-            ]),
-          ),
-        ]),
-        actions: [
-          if (_tab == 0) IconButton(tooltip: 'Refresh', onPressed: () => ctrl.refresh(), icon: const Icon(Icons.refresh, color: C.ink)),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: C.ink),
-            onSelected: (v) { if (v == 'unlink') widget.onUnlink(); },
-            itemBuilder: (_) => [const PopupMenuItem(value: 'unlink', child: Text('Unlink device'))],
-          ),
-        ],
-      ),
-      body: AnimatedBuilder(
-        animation: ctrl,
-        builder: (_, _) {
-          final takeover = ctrl.queue.isNotEmpty ? ctrl.queue.first : null;
-          return Stack(children: [
-            IndexedStack(index: _tab, children: [
-              OrdersBoard(ctrl: ctrl),
-              const SellScreen(),
-              const ReportsScreen(),
-              MoreScreen(onUnlink: widget.onUnlink, onEnterKiosk: widget.onEnterKiosk),
-            ]),
-            // Incoming online order takes over the whole screen, any tab.
-            if (takeover != null)
-              Positioned.fill(child: NewOrderTakeover(key: ValueKey(takeover.id), order: takeover, ctrl: ctrl)),
-          ]);
-        },
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: [
-          NavigationDestination(
-            icon: Badge(isLabelVisible: ctrl.queue.isNotEmpty, label: Text('${ctrl.queue.length}'), child: const Icon(Icons.receipt_long_outlined)),
-            selectedIcon: const Icon(Icons.receipt_long),
-            label: 'Orders',
-          ),
-          const NavigationDestination(icon: Icon(Icons.point_of_sale_outlined), selectedIcon: Icon(Icons.point_of_sale), label: 'Sell'),
-          const NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart), label: 'Reports'),
-          const NavigationDestination(icon: Icon(Icons.more_horiz), selectedIcon: Icon(Icons.more_horiz), label: 'More'),
-        ],
-      ),
-    );
-  }
-}

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../services/staff_store.dart';
 import '../pos/order_view.dart';
+import '../pos/online_orders.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 
@@ -55,6 +56,19 @@ class _PosShellState extends State<PosShell> {
   String _settingsTab = 'pax';
   bool _menuOpen = false;
   bool _userMenuOpen = false;
+  final ctrl = OnlineOrdersController();
+
+  @override
+  void initState() {
+    super.initState();
+    ctrl.start();
+  }
+
+  @override
+  void dispose() {
+    ctrl.dispose();
+    super.dispose();
+  }
 
   void _openView(String view, [String? tab]) {
     setState(() { _view = view; if (tab != null) _settingsTab = tab; _menuOpen = false; });
@@ -82,6 +96,12 @@ class _PosShellState extends State<PosShell> {
               )),
             if (_menuOpen) _mainMenu(c),
             if (_userMenuOpen) _userMenu(c),
+            // Full-screen takeover for the front NEW online order (any view).
+            AnimatedBuilder(animation: ctrl, builder: (context, _) {
+              final o = ctrl.queue.isNotEmpty ? ctrl.queue.first : null;
+              if (o == null) return const SizedBox.shrink();
+              return Positioned.fill(child: NewOrderTakeover(key: ValueKey(o.id), ctrl: ctrl, order: o));
+            }),
           ]),
         );
       },
@@ -304,6 +324,7 @@ class _PosShellState extends State<PosShell> {
   Widget _content(PosColors c) {
     // Faithfully-rebuilt views render for real; the rest show a placeholder.
     if (_view == 'sell') return OrderView(staff: widget.staff);
+    if (_view == 'board') return OrdersBoard(ctrl: ctrl);
     // Each remaining view is rebuilt in a later step. Until then, a dark
     // placeholder keeps the shell consistent and shows what's coming.
     final label = {
