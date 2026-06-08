@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'hardware.dart';
 import 'menu.dart';
 import 'pax.dart';
 import 'printer.dart';
@@ -434,6 +435,9 @@ class _PaymentSheetState extends State<PaymentSheet> {
   // Terminal config (loaded from settings; empty IP → simulated card).
   String _termIp = '';
   int _termPort = 10009;
+  // Cash-drawer config.
+  String _drawerMode = 'android_intent';
+  String _drawerHost = '';
 
   @override
   void initState() {
@@ -444,11 +448,19 @@ class _PaymentSheetState extends State<PaymentSheet> {
   Future<void> _loadTerminal() async {
     final s = await Api.instance.getSettings();
     if (!mounted) return;
-    final pay = Map<String, dynamic>.from(Map<String, dynamic>.from(s['settings'] ?? {})['payment'] ?? {});
+    final settings = Map<String, dynamic>.from(s['settings'] ?? {});
+    final pay = Map<String, dynamic>.from(settings['payment'] ?? {});
+    final hw = Map<String, dynamic>.from(settings['hardware'] ?? {});
     setState(() {
       _termIp = (pay['ip'] ?? '').toString();
       _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009;
+      _drawerMode = (hw['cashDrawerMode'] ?? 'android_intent').toString();
+      _drawerHost = (hw['printerHost'] ?? '').toString();
     });
+  }
+
+  Future<void> _kickDrawer() async {
+    try { await CashDrawer.open(mode: _drawerMode, printerHost: _drawerHost.isEmpty ? null : _drawerHost); } catch (_) {}
   }
 
   double get _recv => double.tryParse(_received.text) ?? 0;
@@ -461,6 +473,7 @@ class _PaymentSheetState extends State<PaymentSheet> {
       if (!mounted) return;
       setState(() => _busy = false);
       if (ok) {
+        _kickDrawer(); // pop the cash drawer (built-in / network printer)
         Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment failed'), backgroundColor: C.red));
