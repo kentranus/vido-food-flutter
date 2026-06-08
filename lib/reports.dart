@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'history.dart';
 import 'menu_manage.dart';
+import 'settings.dart';
 import 'theme.dart';
 
 /// Reports + recent order history (owner view). Mirrors React ReportsView/HistoryView.
@@ -147,6 +149,28 @@ class MoreScreen extends StatelessWidget {
           subtitle: const Text('Add / edit / delete items, prices, 86', style: TextStyle(fontSize: 12)),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MenuManageScreen())),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Container(
+        decoration: BoxDecoration(color: C.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
+        child: ListTile(
+          leading: const Icon(Icons.receipt_long, color: C.online),
+          title: const Text('Order history', style: TextStyle(fontWeight: FontWeight.w800, color: C.ink)),
+          subtitle: const Text('Look up receipts, reprint, refund', style: TextStyle(fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen())),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Container(
+        decoration: BoxDecoration(color: C.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
+        child: ListTile(
+          leading: const Icon(Icons.settings, color: C.pos),
+          title: const Text('Settings', style: TextStyle(fontWeight: FontWeight.w800, color: C.ink)),
+          subtitle: const Text('Shop info, payment, staff, display', style: TextStyle(fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SettingsScreen(onEnterKiosk: onEnterKiosk))),
         ),
       ),
       const SizedBox(height: 12),

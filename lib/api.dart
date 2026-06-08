@@ -251,6 +251,18 @@ class Api {
   // ---- Reports + history ----
   Future<Map<String, dynamic>> getReports() => _get('/api/reports/summary');
   Future<Map<String, dynamic>> getOrders() => _get('/api/orders');
+  Future<Map<String, dynamic>> refundOrder(String id, {double? amount, String reason = ''}) =>
+      _post('/api/orders/$id/refund', {'amount': ?amount, 'reason': reason});
+  Future<Map<String, dynamic>> voidOrder(String id, {String reason = ''}) =>
+      _post('/api/orders/$id/void', {'reason': reason});
+
+  // ---- Settings (shop info / payment / customer display / kiosks) ----
+  Future<Map<String, dynamic>> saveSettings(Map<String, dynamic> patch) => _post('/api/settings', patch);
+
+  // ---- Staff & PINs ----
+  Future<Map<String, dynamic>> getStaff() => _get('/api/staff');
+  Future<Map<String, dynamic>> addStaff(String name, String email, String password) =>
+      _post('/api/staff', {'name': name, 'email': email, 'password': password});
 
   // ---- Customise own online-order link slug ----
   Future<Map<String, dynamic>> setSlug(String slug) => _post('/api/me/slug', {'slug': slug});
