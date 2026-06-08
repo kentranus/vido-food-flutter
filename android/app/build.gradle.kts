@@ -50,11 +50,12 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // PAX PosLink Android SDK (real card terminal) + its runtime deps.
+    // PAX PosLink Android SDK (real card terminal). Its runtime deps come from
+    // Maven (NOT bundled jars) so Gradle dedups versions — bundling them caused
+    // duplicate-class errors vs gson/okhttp already on the classpath.
     implementation(files("libs/PAX_POSLinkAndroid_20260202.aar"))
-    implementation(files("libs/gson-2.8.6.jar"))
-    implementation(files("libs/jsch-0.1.55.jar"))
-    implementation(files("libs/okhttp-4.9.0.jar"))
-    implementation(files("libs/okio-2.8.0.jar"))
-    implementation(files("libs/zxing-core-3.3.3.jar"))
+    implementation("com.google.code.gson:gson:2.8.9")
+    implementation("com.squareup.okhttp3:okhttp:4.9.0")
+    implementation("com.google.zxing:core:3.3.3")
+    implementation("com.jcraft:jsch:0.1.55")
 }
