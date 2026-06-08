@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'menu.dart';
+import 'pax.dart';
 import 'printer.dart';
 import 'theme.dart';
 
@@ -60,7 +61,7 @@ class _SellScreenState extends State<SellScreen> {
     if (cart.isEmpty) return;
     final paid = await showModalBottomSheet<bool>(
       context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-      builder: (_) => PaymentSheet(total: _total, onComplete: (method, received) async {
+      builder: (_) => PaymentSheet(total: _total, onComplete: (method, received, card) async {
         final order = {
           'source': 'POS',
           'orderType': _type.toUpperCase().replaceAll(' ', '_'),
@@ -72,6 +73,11 @@ class _SellScreenState extends State<SellScreen> {
           'total': _total,
           'cashReceived': received,
           'changeGiven': received > 0 ? (received - _total) : 0,
+          if (card != null) ...{
+            'cardLast4': card.cardLast4,
+            'cardType': card.cardType,
+            'authCode': card.authCode,
+          },
           'items': cart.map((l) => {
                 'nameSnapshot': l.item.name,
                 'quantity': l.qty,
@@ -410,11 +416,11 @@ class _CustomizeSheetState extends State<CustomizeSheet> {
 }
 
 // ---------------------------------------------------------------------------
-// Payment sheet — cash (change) / card (mock). Mirrors the React PaymentModal.
+// Payment sheet — cash (change) / card (real PAX terminal). Mirrors the React PaymentModal.
 // ---------------------------------------------------------------------------
 class PaymentSheet extends StatefulWidget {
   final double total;
-  final Future<bool> Function(String method, double received) onComplete;
+  final Future<bool> Function(String method, double received, PaxResult? card) onComplete;
   const PaymentSheet({super.key, required this.total, required this.onComplete});
   @override
   State<PaymentSheet> createState() => _PaymentSheetState();
@@ -424,19 +430,64 @@ class _PaymentSheetState extends State<PaymentSheet> {
   String _method = 'cash';
   final _received = TextEditingController();
   bool _busy = false;
+  String? _cardStatus; // live terminal status / error
+  // Terminal config (loaded from settings; empty IP → simulated card).
+  String _termIp = '';
+  int _termPort = 10009;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTerminal();
+  }
+
+  Future<void> _loadTerminal() async {
+    final s = await Api.instance.getSettings();
+    if (!mounted) return;
+    final pay = Map<String, dynamic>.from(Map<String, dynamic>.from(s['settings'] ?? {})['payment'] ?? {});
+    setState(() {
+      _termIp = (pay['ip'] ?? '').toString();
+      _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009;
+    });
+  }
 
   double get _recv => double.tryParse(_received.text) ?? 0;
   double get _change => _recv - widget.total;
 
   Future<void> _done() async {
-    setState(() => _busy = true);
-    final ok = await widget.onComplete(_method, _method == 'cash' ? _recv : 0);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (ok) {
-      Navigator.pop(context, true);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment failed'), backgroundColor: C.red));
+    if (_method == 'cash') {
+      setState(() => _busy = true);
+      final ok = await widget.onComplete('cash', _recv, null);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (ok) {
+        Navigator.pop(context, true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment failed'), backgroundColor: C.red));
+      }
+      return;
+    }
+    // Card → drive the PAX terminal (or simulated approval if no IP set).
+    setState(() { _busy = true; _cardStatus = _termIp.isEmpty ? 'Charging card (test)…' : 'Waiting for card on terminal…'; });
+    try {
+      final res = await Pax.sale(amount: widget.total, host: _termIp.isEmpty ? null : _termIp, port: _termPort);
+      if (!mounted) return;
+      if (!res.approved) {
+        setState(() { _busy = false; _cardStatus = 'Declined${res.message.isNotEmpty ? ': ${res.message}' : ''}'; });
+        return;
+      }
+      setState(() => _cardStatus = res.simulated ? 'Approved (test)' : 'Approved · ${res.cardType} ••${res.cardLast4}');
+      final ok = await widget.onComplete('card', 0, res);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (ok) {
+        Navigator.pop(context, true);
+      } else {
+        setState(() => _cardStatus = 'Card approved but saving the order failed');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() { _busy = false; _cardStatus = 'Terminal error: $e'; });
     }
   }
 
@@ -474,14 +525,29 @@ class _PaymentSheetState extends State<PaymentSheet> {
                   Text(money(_change.clamp(0, double.infinity)), style: TextStyle(fontWeight: FontWeight.w900, color: _change >= 0 ? C.green : C.red, fontSize: 18)),
                 ]),
               ),
-          ] else
-            const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text('Tap Complete to charge the card (terminal/PAX wired in a later phase).',
-                style: TextStyle(color: C.textMute, fontWeight: FontWeight.w600), textAlign: TextAlign.center)),
+          ] else ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: C.bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
+              child: Row(children: [
+                Icon(_termIp.isEmpty ? Icons.wifi_off : Icons.point_of_sale, color: _termIp.isEmpty ? C.textMute : C.kiosk, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(
+                  _cardStatus ?? (_termIp.isEmpty
+                      ? 'No terminal IP set (Settings → Payment). Card will be a test approval.'
+                      : 'PAX terminal $_termIp:$_termPort — tap Charge to send the sale.'),
+                  style: const TextStyle(color: C.ink, fontWeight: FontWeight.w700, fontSize: 13))),
+              ]),
+            ),
+          ],
           const SizedBox(height: 16),
           SizedBox(height: 54, child: ElevatedButton(
             onPressed: _busy || (_method == 'cash' && _recv < widget.total) ? null : _done,
             style: ElevatedButton.styleFrom(backgroundColor: C.green, foregroundColor: const Color(0xFF06210F), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-            child: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Complete order', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+            child: _busy
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : Text(_method == 'card' ? 'Charge card' : 'Complete order', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
           )),
         ]),
       ),

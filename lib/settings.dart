@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'pax.dart';
 import 'theme.dart';
 
 /// Settings — Shop Info / Payment terminal / Customer Display / Staff / Device / About.
@@ -192,8 +193,21 @@ class _PaymentSectionState extends State<_PaymentSection> {
         TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Run')),
       ]));
     if (go != true || !mounted) return;
-    // Terminal bridge is native-only (PAX/BroadPOS over TCP); in this build it is a mock.
-    _toast(context, false, 'Terminal not reachable in this build (mock). Configure on a paired device.');
+    final ip = _ip.text.trim();
+    _toast(context, true, ip.isEmpty ? 'Running test approval…' : 'Sending \$0.01 to $ip…');
+    try {
+      final res = await Pax.sale(amount: 0.01, host: ip.isEmpty ? null : ip, port: int.tryParse(_port.text) ?? 10009);
+      if (!mounted) return;
+      if (res.approved) {
+        _toast(context, true, res.simulated
+            ? 'Test approved (no terminal — simulated)'
+            : 'Approved · ${res.cardType} ••${res.cardLast4} · auth ${res.authCode}');
+      } else {
+        _toast(context, false, 'Declined${res.message.isNotEmpty ? ': ${res.message}' : ''}');
+      }
+    } catch (e) {
+      if (mounted) _toast(context, false, 'Terminal error: $e');
+    }
   }
 
   @override
