@@ -7,8 +7,13 @@ import 'orders.dart';
 import 'pos_sell.dart';
 import 'reports.dart';
 import 'kiosk.dart';
+import 'push.dart';
 
-void main() => runApp(const VidoFoodApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initPush(); // FCM (Android) — safe no-op on web/iOS
+  runApp(const VidoFoodApp());
+}
 
 class VidoFoodApp extends StatelessWidget {
   const VidoFoodApp({super.key});
@@ -64,6 +69,7 @@ class _RootGateState extends State<RootGate> {
 
   void _startLicense() {
     _runLicense();
+    registerPushForStore(); // FCM token → backend (Android); no-op on web/iOS
     _licTimer?.cancel();
     _licTimer = Timer.periodic(const Duration(minutes: 5), (_) => _runLicense());
   }

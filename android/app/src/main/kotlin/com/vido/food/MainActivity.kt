@@ -1,4 +1,4 @@
-package com.vido.vido_food_app
+package com.vido.food
 
 import io.flutter.embedding.android.FlutterActivity
 
