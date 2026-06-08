@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'hardware.dart';
 import 'pax.dart';
 import 'theme.dart';
 
@@ -42,6 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(padding: const EdgeInsets.all(12), children: [
               _ShopInfoSection(shop: Map<String, dynamic>.from(_settings['shop'] ?? {}), onSaved: _load),
               _PaymentSection(payment: Map<String, dynamic>.from(_settings['payment'] ?? {}), onSaved: _load),
+              _HardwareSection(hardware: Map<String, dynamic>.from(_settings['hardware'] ?? {}), onSaved: _load),
               _DisplaySection(display: Map<String, dynamic>.from(_settings['customerDisplay'] ?? {}), onSaved: _load),
               const _StaffSection(),
               _DeviceSection(onEnterKiosk: widget.onEnterKiosk),
@@ -224,6 +226,75 @@ class _PaymentSectionState extends State<_PaymentSection> {
           _saveBtn(_busy, _save),
           const SizedBox(height: 8),
           OutlinedButton.icon(onPressed: _testSale, icon: const Icon(Icons.bolt), label: const Text('Run test sale (\$0.01)'),
+            style: OutlinedButton.styleFrom(foregroundColor: C.ink, side: const BorderSide(color: C.border), minimumSize: const Size.fromHeight(46))),
+        ],
+      );
+}
+
+// ============================================================ Hardware (cash drawer)
+class _HardwareSection extends StatefulWidget {
+  final Map<String, dynamic> hardware;
+  final Future<void> Function() onSaved;
+  const _HardwareSection({required this.hardware, required this.onSaved});
+  @override
+  State<_HardwareSection> createState() => _HardwareSectionState();
+}
+
+class _HardwareSectionState extends State<_HardwareSection> {
+  late String _mode = (widget.hardware['cashDrawerMode'] ?? 'android_intent').toString();
+  late final _host = TextEditingController(text: '${widget.hardware['printerHost'] ?? ''}');
+  bool _busy = false;
+
+  Future<void> _save() async {
+    setState(() => _busy = true);
+    final r = await Api.instance.saveSettings({'hardware': {
+      'cashDrawerMode': _mode,
+      'printerHost': _host.text.trim(),
+    }});
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final ok = r['ok'] == true;
+    _toast(context, ok);
+    if (ok) await widget.onSaved();
+  }
+
+  Future<void> _test() async {
+    _toast(context, true, 'Opening cash drawer…');
+    try {
+      final r = await CashDrawer.open(mode: _mode, printerHost: _host.text.trim().isEmpty ? null : _host.text.trim());
+      if (!mounted) return;
+      if (r['skipped'] == true) {
+        _toast(context, false, 'Cash drawer only works on the Android POS device');
+      } else {
+        _toast(context, r['ok'] == true, r['ok'] == true ? 'Drawer pulse sent' : 'Drawer did not respond');
+      }
+    } catch (e) {
+      if (mounted) _toast(context, false, 'Drawer error: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _Section(
+        icon: Icons.point_of_sale, tone: C.brandDark, title: 'Cash Drawer', subtitle: 'Drawer / printer hardware',
+        children: [
+          const Text('How the drawer opens after a cash sale.', style: TextStyle(fontSize: 12, color: C.textMute, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _mode,
+            decoration: InputDecoration(labelText: 'Drawer mode', isDense: true, filled: true, fillColor: C.bg,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)),
+            items: const [
+              DropdownMenuItem(value: 'android_intent', child: Text('Built-in POS drawer')),
+              DropdownMenuItem(value: 'network_escpos', child: Text('Network receipt printer')),
+              DropdownMenuItem(value: 'usb_escpos', child: Text('USB receipt printer')),
+            ],
+            onChanged: (v) => setState(() => _mode = v ?? _mode),
+          ),
+          const SizedBox(height: 12),
+          if (_mode == 'network_escpos') _field('Printer IP', _host, hint: '192.168.x.x'),
+          _saveBtn(_busy, _save),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: _test, icon: const Icon(Icons.outbox), label: const Text('Test open drawer'),
             style: OutlinedButton.styleFrom(foregroundColor: C.ink, side: const BorderSide(color: C.border), minimumSize: const Size.fromHeight(46))),
         ],
       );
