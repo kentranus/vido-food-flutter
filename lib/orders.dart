@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'printer.dart';
 import 'theme.dart';
 
 /// Single source of truth for live online orders — polling + looping chime +
@@ -64,6 +65,13 @@ class OnlineOrdersController extends ChangeNotifier {
   Future<Map<String, dynamic>> accept(OnlineOrder o, int eta) async {
     final r = await Api.instance.accept(o.id, eta); // backend captures the card here
     if (r['ok'] != true) return {'ok': false, 'error': r['error'] ?? 'Confirm failed'};
+    try {
+      await printKitchenTicket(
+        source: o.source, number: (o.number ?? o.id), type: o.orderType,
+        customer: o.customer, phone: o.customerPhone,
+        items: o.items.map((it) => {'qty': it.quantity, 'name': it.name, 'mods': it.modifiers, 'notes': it.notes}).toList(),
+      );
+    } catch (_) {}
     try { await Api.instance.markPrinted(o.id); } catch (_) {}
     await refresh();
     return {'ok': true};

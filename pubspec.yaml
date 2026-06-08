@@ -37,6 +37,8 @@ dependencies:
   http: ^1.2.2
   shared_preferences: ^2.3.2
   audioplayers: ^6.1.0
+  printing: ^5.13.3
+  pdf: ^3.11.1
 
 dev_dependencies:
   flutter_test:

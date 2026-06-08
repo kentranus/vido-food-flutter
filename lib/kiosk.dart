@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'menu.dart';
 import 'pos_sell.dart' show CustomizeSheet;
+import 'printer.dart';
 import 'theme.dart';
 
 /// KIOSK MODE — customer self-order (big touch UI). Orders post to the backend
@@ -51,10 +52,16 @@ class _KioskScreenState extends State<KioskScreen> {
             'modifiers': l.mods.map((m) => {'optionName': m.name, 'priceDelta': m.priceDelta}).toList(), 'notes': l.note,
           }).toList(),
     };
+    final snapshot = List<CartLine>.from(cart);
     final r = await Api.instance.createKioskOrder(order);
     if (!mounted) return;
     if (r['ok'] == true) {
-      setState(() { _doneNumber = (r['order']?['number'] ?? r['order']?['id'] ?? '').toString(); cart.clear(); _checkout = false; });
+      final num = (r['order']?['number'] ?? r['order']?['id'] ?? '').toString();
+      try {
+        await printKitchenTicket(source: 'Kiosk', number: num, type: 'PICKUP',
+          items: snapshot.map((l) => {'qty': l.qty, 'name': l.item.name, 'mods': l.mods.map((m) => m.name).toList(), 'notes': l.note}).toList());
+      } catch (_) {}
+      setState(() { _doneNumber = num; cart.clear(); _checkout = false; });
       Future.delayed(const Duration(seconds: 6), () { if (mounted) setState(() => _doneNumber = null); });
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r['error']?.toString() ?? 'Order failed'), backgroundColor: C.red));

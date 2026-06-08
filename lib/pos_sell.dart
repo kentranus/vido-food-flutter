@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'menu.dart';
+import 'printer.dart';
 import 'theme.dart';
 
 const _orderTypes = ['Dine In', 'To Go', 'Delivery'];
@@ -81,6 +82,17 @@ class _SellScreenState extends State<SellScreen> {
               }).toList(),
         };
         final r = await Api.instance.createOrder(order);
+        if (r['ok'] == true) {
+          final num = (r['order']?['number'] ?? r['order']?['id'] ?? '').toString();
+          try {
+            await printReceipt(
+              storeName: Api.instance.storeName, number: num, type: _type,
+              items: cart.map((l) => {'qty': l.qty, 'name': l.item.name, 'lineTotal': l.lineTotal}).toList(),
+              subtotal: _subtotal, tax: _tax, total: _total,
+              paymentMethod: method, cashReceived: received, change: received > 0 ? received - _total : 0,
+            );
+          } catch (_) {}
+        }
         return r['ok'] == true;
       }),
     );

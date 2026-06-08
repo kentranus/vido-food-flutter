@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'menu_manage.dart';
 import 'theme.dart';
 
 /// Reports + recent order history (owner view). Mirrors React ReportsView/HistoryView.
@@ -137,6 +138,17 @@ class MoreScreen extends StatelessWidget {
       ])),
       const SizedBox(height: 12),
       _card('Online order link', const _OrderLinkEditor()),
+      const SizedBox(height: 12),
+      Container(
+        decoration: BoxDecoration(color: C.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),
+        child: ListTile(
+          leading: const Icon(Icons.restaurant_menu, color: C.brandDark),
+          title: const Text('Manage menu', style: TextStyle(fontWeight: FontWeight.w800, color: C.ink)),
+          subtitle: const Text('Add / edit / delete items, prices, 86', style: TextStyle(fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MenuManageScreen())),
+        ),
+      ),
       const SizedBox(height: 12),
       Container(
         decoration: BoxDecoration(color: C.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: C.border)),

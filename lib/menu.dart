@@ -88,6 +88,37 @@ class MenuRepo {
     loaded = true;
   }
 
+  List<Map<String, dynamic>> get rawItems => List<Map<String, dynamic>>.from(((raw['items'] ?? []) as List).map((e) => Map<String, dynamic>.from(e)));
+
+  /// Persist the full menu (lossless) after caller edits raw['items'], then reload models.
+  Future<bool> _saveAndReload() async {
+    final r = await Api.instance.saveMenu({
+      'categories': raw['categories'] ?? [],
+      'items': raw['items'] ?? [],
+      'modifierGroups': raw['modifierGroups'] ?? [],
+    });
+    if (r['ok'] == true) await load();
+    return r['ok'] == true;
+  }
+
+  Future<bool> upsertItem(Map<String, dynamic> item) async {
+    final list = (raw['items'] ?? (raw['items'] = [])) as List;
+    final id = (item['id'] ?? '').toString();
+    final idx = list.indexWhere((e) => (e['id'] ?? '').toString() == id);
+    if (idx >= 0) {
+      list[idx] = {...Map<String, dynamic>.from(list[idx]), ...item};
+    } else {
+      list.add({'icon': '🍵', 'available': true, 'is86d': false, 'modifierGroupIds': ['mg-size', 'mg-sugar', 'mg-ice', 'mg-toppings'], ...item});
+    }
+    return _saveAndReload();
+  }
+
+  Future<bool> deleteItem(String id) async {
+    final list = (raw['items'] ?? []) as List;
+    list.removeWhere((e) => (e['id'] ?? '').toString() == id);
+    return _saveAndReload();
+  }
+
   /// Toggle "86 / sold out" for an item and persist the full menu (lossless).
   Future<bool> set86(String itemId, bool is86d) async {
     final rawItems = (raw['items'] ?? []) as List;
