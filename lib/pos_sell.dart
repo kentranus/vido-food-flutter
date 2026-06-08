@@ -443,6 +443,8 @@ class _PaymentSheetState extends State<PaymentSheet> {
   void initState() {
     super.initState();
     _loadTerminal();
+    // Mirror the amount due on the customer second screen (if enabled/attached).
+    CustomerDisplay.update({'state': 'payment', 'total': widget.total, 'method': 'Payment', 'shop': {'name': Api.instance.storeName}});
   }
 
   Future<void> _loadTerminal() async {
@@ -474,6 +476,7 @@ class _PaymentSheetState extends State<PaymentSheet> {
       setState(() => _busy = false);
       if (ok) {
         _kickDrawer(); // pop the cash drawer (built-in / network printer)
+        CustomerDisplay.update({'state': 'done', 'total': widget.total, 'shop': {'name': Api.instance.storeName}});
         Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment failed'), backgroundColor: C.red));
@@ -494,6 +497,7 @@ class _PaymentSheetState extends State<PaymentSheet> {
       if (!mounted) return;
       setState(() => _busy = false);
       if (ok) {
+        CustomerDisplay.update({'state': 'done', 'total': widget.total, 'shop': {'name': Api.instance.storeName}});
         Navigator.pop(context, true);
       } else {
         setState(() => _cardStatus = 'Card approved but saving the order failed');

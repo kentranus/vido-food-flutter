@@ -22,6 +22,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         CashDrawerChannel(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
+        CustomerDisplayChannel(flutterEngine.dartExecutor.binaryMessenger, this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
                 "init" -> Thread {
