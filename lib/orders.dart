@@ -8,6 +8,10 @@ import 'theme.dart';
 /// Single source of truth for live online orders — polling + looping chime +
 /// accept/reject/ready/complete. Mirrors OnlineOrdersProvider (React).
 class OnlineOrdersController extends ChangeNotifier {
+  /// The live controller for the foreground board, so an FCM push can refresh
+  /// it immediately (instead of waiting for the 8s poll).
+  static OnlineOrdersController? active;
+
   List<OnlineOrder> orders = [];
   List<OnlineOrder> queue = []; // NEW online orders awaiting accept (drives takeover)
   bool online = true;
@@ -18,12 +22,14 @@ class OnlineOrdersController extends ChangeNotifier {
   bool _chiming = false;
 
   void start() {
+    active = this;
     refresh();
     _timer = Timer.periodic(const Duration(seconds: 8), (_) => refresh());
   }
 
   @override
   void dispose() {
+    if (active == this) active = null;
     _timer?.cancel();
     _player.dispose();
     super.dispose();
