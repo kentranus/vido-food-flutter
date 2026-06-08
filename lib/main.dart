@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'theme.dart';
-import 'kiosk.dart';
+import 'pos/kiosk_screen.dart';
 import 'push.dart';
 import 'services/staff_store.dart';
 import 'screens/cloud_login.dart';
@@ -139,6 +139,9 @@ class _RootGateState extends State<RootGate> {
     if (preview == 'settings') {
       return Scaffold(backgroundColor: const Color(0xFF0F1419),
           body: SafeArea(child: SettingsScreen(initialTab: Uri.base.queryParameters['tab'] ?? 'pax', onEnterKiosk: () {})));
+    }
+    if (preview == 'kiosk') {
+      return KioskScreen(onExit: () {});
     }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: C.brand)));

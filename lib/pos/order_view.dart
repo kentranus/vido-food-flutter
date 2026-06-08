@@ -103,7 +103,7 @@ class _OrderViewState extends State<OrderView> {
         .toList();
     final line = await showDialog<CartLine>(
       context: context, barrierColor: PT.c.overlay,
-      builder: (_) => _CustomizeSheet(product: p, toppings: toppingItems),
+      builder: (_) => CustomizeSheet(product: p, toppings: toppingItems),
     );
     if (line != null) _addLine(line);
   }
@@ -586,15 +586,15 @@ class _OrderViewState extends State<OrderView> {
 // ============================================================================
 // CUSTOMIZE SHEET — size / sugar / ice / toppings. Port of CustomizeModal.
 // ============================================================================
-class _CustomizeSheet extends StatefulWidget {
+class CustomizeSheet extends StatefulWidget {
   final MenuItem product;
   final List<Topping> toppings;
-  const _CustomizeSheet({required this.product, required this.toppings});
+  const CustomizeSheet({super.key, required this.product, required this.toppings});
   @override
-  State<_CustomizeSheet> createState() => _CustomizeSheetState();
+  State<CustomizeSheet> createState() => _CustomizeSheetState();
 }
 
-class _CustomizeSheetState extends State<_CustomizeSheet> {
+class _CustomizeSheetState extends State<CustomizeSheet> {
   String _size = 'R';
   int _sugar = 100, _ice = 100;
   final List<Topping> _sel = [];
