@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../services/staff_store.dart';
+import '../pos/order_view.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 
@@ -301,7 +302,9 @@ class _PosShellState extends State<PosShell> {
 
   // ----------------------------------------------------------------- content
   Widget _content(PosColors c) {
-    // Each view is rebuilt faithfully in a later step. Until then, a dark
+    // Faithfully-rebuilt views render for real; the rest show a placeholder.
+    if (_view == 'sell') return OrderView(staff: widget.staff);
+    // Each remaining view is rebuilt in a later step. Until then, a dark
     // placeholder keeps the shell consistent and shows what's coming.
     final label = {
       'sell': 'Sell / Order Entry', 'board': 'Online Orders', 'kiosk': 'Kiosk Mode',

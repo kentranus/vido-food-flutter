@@ -3,7 +3,8 @@ import 'api.dart';
 class MenuCategory {
   final String id;
   final String name;
-  const MenuCategory(this.id, this.name);
+  final String icon;
+  const MenuCategory(this.id, this.name, [this.icon = '🍽️']);
 }
 
 class ModOption {
@@ -54,7 +55,7 @@ class MenuRepo {
       final menu = Map<String, dynamic>.from(m['menu']);
       raw = menu;
       categories = ((menu['categories'] ?? []) as List)
-          .map((c) => MenuCategory((c['id'] ?? '').toString(), (c['name'] ?? '').toString()))
+          .map((c) => MenuCategory((c['id'] ?? '').toString(), (c['name'] ?? '').toString(), (c['icon'] ?? '🍽️').toString()))
           .toList();
       items = ((menu['items'] ?? []) as List).map((e) {
         final i = Map<String, dynamic>.from(e);

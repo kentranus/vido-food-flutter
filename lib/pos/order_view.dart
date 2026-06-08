@@ -1,0 +1,741 @@
+import 'package:flutter/material.dart';
+import '../menu.dart' hide CartLine;
+import '../services/staff_store.dart';
+import '../screens/pin_lock.dart';
+import '../ui/pos_theme.dart';
+import '../ui/pos_widgets.dart';
+import 'default_menu.dart';
+import 'order_models.dart';
+
+/// OrderView (Sell) — faithful port of React views/OrderView.jsx.
+/// Layout: OrderRail (multi-order tabs) | Middle (type toggle + search + cash
+/// drawer + category rail + product grid) | Cart. Dark theme.
+/// 4a = layout + cart + multi-order + add/qty. Customize/Discount/Note/Payment
+/// modals are wired in the following steps (4b/4c).
+class OrderView extends StatefulWidget {
+  final Staff staff;
+  const OrderView({super.key, required this.staff});
+  @override
+  State<OrderView> createState() => _OrderViewState();
+}
+
+class _OrderViewState extends State<OrderView> {
+  final repo = MenuRepo();
+  bool _loading = true;
+  List<Order> _orders = [];
+  String? _activeId;
+  String _activeCat = 'all';
+  String _search = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    await OrderCounter.init();
+    await repo.load();
+    // Offline-first fallback: if the cloud menu is empty, seed the defaults
+    // (mirrors React shipping DEFAULT_MENU then overriding from cloud).
+    if (repo.items.isEmpty) {
+      repo.categories = List.of(kDefaultCategories);
+      repo.items = List.of(kDefaultMenu);
+    }
+    if (repo.taxRate > 0) ShopConfig.tax = repo.taxRate;
+    if (!mounted) return;
+    setState(() {
+      _orders = [emptyOrder()];
+      _activeId = _orders.first.id;
+      _loading = false;
+    });
+  }
+
+  Order get _active => _orders.firstWhere((o) => o.id == _activeId, orElse: () => _orders.first);
+
+  void _updateActive(VoidCallback mutate) => setState(mutate);
+
+  void _addOrder() {
+    final o = emptyOrder();
+    setState(() { _orders.insert(0, o); _activeId = o.id; });
+  }
+
+  void _addLine(CartLine l) => _updateActive(() => _active.items.add(l));
+
+  Future<void> _addProduct(MenuItem p) async {
+    if (!p.sellable) return;
+    // Snacks/toppings add directly; drinks open the customize sheet.
+    if (p.category == 'snack' || p.category == 'topping') {
+      _addLine(CartLine(
+        id: 'L${DateTime.now().microsecondsSinceEpoch}',
+        productId: p.id, name: p.name, emoji: p.icon, category: p.category, basePrice: p.price));
+      return;
+    }
+    final toppingItems = repo.items
+        .where((m) => m.category == 'topping' && m.sellable)
+        .map((m) => Topping(m.id, m.name, m.price))
+        .toList();
+    final line = await showDialog<CartLine>(
+      context: context, barrierColor: PT.c.overlay,
+      builder: (_) => _CustomizeSheet(product: p, toppings: toppingItems),
+    );
+    if (line != null) _addLine(line);
+  }
+
+  Future<void> _openDiscount() async {
+    // Manager-only — gate with a manager PIN if the cashier isn't a manager.
+    if (!widget.staff.isManager) {
+      final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => PinLockScreen(
+          title: 'Manager PIN', subtitle: 'Required for discount', managerOnly: true,
+          onUnlock: (_) => Navigator.of(context).pop(true),
+          onCancel: () => Navigator.of(context).pop(false),
+        ),
+      ));
+      if (ok != true) return;
+    }
+    if (!mounted) return;
+    final res = await showDialog<({double value, String type})>(
+      context: context, barrierColor: PT.c.overlay,
+      builder: (_) => _DiscountDialog(order: _active),
+    );
+    if (res != null) _updateActive(() { _active.discount = res.value; _active.discountType = res.type; });
+  }
+
+  Future<void> _openNote() async {
+    final note = await showDialog<String>(
+      context: context, barrierColor: PT.c.overlay,
+      builder: (_) => _NoteDialog(initial: _active.note),
+    );
+    if (note != null) _updateActive(() => _active.note = note);
+  }
+
+  void _setQty(CartLine l, int qty) {
+    setState(() {
+      if (qty <= 0) {
+        _active.items.removeWhere((x) => x.id == l.id);
+      } else {
+        l.qty = qty;
+      }
+    });
+  }
+
+  List<MenuItem> get _visible => repo.items.where((m) {
+        if (m.category == 'topping') return false;
+        if (_activeCat != 'all' && m.category != _activeCat) return false;
+        if (_search.isNotEmpty && !m.name.toLowerCase().contains(_search.toLowerCase())) return false;
+        return true;
+      }).toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    if (_loading) return Center(child: CircularProgressIndicator(color: c.primary));
+    return Row(children: [
+      _orderRail(c),
+      Expanded(child: _middle(c)),
+      _cart(c),
+    ]);
+  }
+
+  // ----------------------------------------------------------- order rail (left)
+  Widget _orderRail(PosColors c) {
+    return Container(
+      width: 140,
+      decoration: BoxDecoration(color: c.panel, border: Border(right: BorderSide(color: c.border))),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('ORDERS', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: c.textMute, letterSpacing: 0.5)),
+            GestureDetector(
+              onTap: _addOrder,
+              child: Container(width: 26, height: 26, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: c.primary, shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: c.primaryD, offset: const Offset(0, 2))]),
+                  child: Icon(Icons.add, size: 14, color: c.bg)),
+            ),
+          ]),
+        ),
+        Expanded(child: ListView(padding: const EdgeInsets.all(10), children: [
+          for (final o in _orders) _railItem(c, o),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _railItem(PosColors c, Order o) {
+    final active = o.id == _activeId;
+    final t = orderTypeOf(o.type);
+    return GestureDetector(
+      onTap: () => setState(() => _activeId = o.id),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: active ? c.primary : c.card, borderRadius: BorderRadius.circular(12),
+          boxShadow: active ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 3))] : null,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${t.icon} #${o.number}', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: active ? c.bg : c.text)),
+          Padding(padding: const EdgeInsets.only(top: 4),
+              child: Text('${o.items.length} items', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: active ? c.bg.withValues(alpha: 0.85) : c.textMute))),
+          Padding(padding: const EdgeInsets.only(top: 4),
+              child: Text(money(o.totals.total), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: active ? c.bg : c.text))),
+        ]),
+      ),
+    );
+  }
+
+  // ----------------------------------------------------------- middle
+  Widget _middle(PosColors c) {
+    return Column(children: [
+      // order bar: type toggle + search + cash drawer
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(color: c.panel, border: Border(bottom: BorderSide(color: c.border))),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              for (final t in kOrderTypes) _typeBtn(c, t),
+            ]),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            constraints: const BoxConstraints(minWidth: 240),
+            decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(999)),
+            child: Row(children: [
+              Icon(Icons.search, size: 14, color: c.textDim),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(
+                onChanged: (v) => setState(() => _search = v),
+                style: TextStyle(color: c.text, fontWeight: FontWeight.w800, fontSize: 14),
+                cursorColor: c.primary,
+                decoration: InputDecoration(isDense: true, border: InputBorder.none,
+                    hintText: 'Search menu...', hintStyle: TextStyle(color: c.textDim, fontWeight: FontWeight.w700)),
+              )),
+            ]),
+          )),
+          const SizedBox(width: 10),
+          // Open Cash Drawer (wired to hardware in the Cash Drawer settings step)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            decoration: BoxDecoration(color: c.primaryA, borderRadius: BorderRadius.circular(999), border: Border.all(color: c.primary)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.inventory_2_outlined, size: 14, color: c.primary),
+              const SizedBox(width: 7),
+              Text('Open Cash Drawer', style: TextStyle(color: c.primary, fontWeight: FontWeight.w900, fontSize: 13)),
+            ]),
+          ),
+        ]),
+      ),
+      // inner row: category rail + product grid
+      Expanded(child: Row(children: [
+        _catRail(c),
+        Expanded(child: _grid(c)),
+      ])),
+    ]);
+  }
+
+  Widget _typeBtn(PosColors c, OrderType t) {
+    final active = _active.type == t.id;
+    return GestureDetector(
+      onTap: () => _updateActive(() => _active.type = t.id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: active ? c.cyan : Colors.transparent, borderRadius: BorderRadius.circular(10),
+          boxShadow: active ? [BoxShadow(color: c.cyanD, offset: const Offset(0, 3))] : null,
+        ),
+        child: Text('${t.icon} ${t.label}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: active ? c.bg : c.textMute)),
+      ),
+    );
+  }
+
+  Widget _catRail(PosColors c) {
+    final cats = [const MenuCategory('all', 'All', '🍱'), ...repo.categories.where((x) => x.id != 'topping')];
+    return Container(
+      width: 118,
+      decoration: BoxDecoration(color: c.panel, border: Border(right: BorderSide(color: c.border))),
+      child: ListView(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14), children: [
+        for (final cat in cats) _catBtn(c, cat),
+      ]),
+    );
+  }
+
+  Widget _catBtn(PosColors c, MenuCategory cat) {
+    final active = _activeCat == cat.id;
+    return GestureDetector(
+      onTap: () => setState(() => _activeCat = cat.id),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 13),
+        decoration: BoxDecoration(
+          color: active ? c.primary : Colors.transparent, borderRadius: BorderRadius.circular(14),
+          boxShadow: active ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 3))] : null,
+        ),
+        child: Column(children: [
+          Text(cat.icon, style: const TextStyle(fontSize: 22)),
+          const SizedBox(height: 6),
+          Text(cat.name, textAlign: TextAlign.center, maxLines: 2,
+              style: TextStyle(fontSize: 13, height: 1.2, fontWeight: FontWeight.w900, color: active ? c.bg : c.textMute)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _grid(PosColors c) {
+    final items = _visible;
+    if (items.isEmpty) {
+      return Center(child: Text('No items${_search.isNotEmpty ? ' matching "$_search"' : ' in this category'}',
+          style: TextStyle(color: c.textDim, fontSize: 14, fontWeight: FontWeight.w700)));
+    }
+    return LayoutBuilder(builder: (context, box) {
+      final cols = box.maxWidth >= 1100 ? 5 : box.maxWidth >= 820 ? 4 : box.maxWidth >= 560 ? 3 : 2;
+      return GridView.builder(
+        padding: const EdgeInsets.all(16),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.82),
+        itemCount: items.length,
+        itemBuilder: (_, i) => _productCard(c, items[i]),
+      );
+    });
+  }
+
+  Widget _productCard(PosColors c, MenuItem p) {
+    final soldOut = !p.sellable;
+    final inCart = _active.items.any((i) => i.productId == p.id);
+    return Opacity(
+      opacity: soldOut ? 0.4 : 1,
+      child: GestureDetector(
+        onTap: soldOut ? null : () => _addProduct(p),
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.panel, borderRadius: BorderRadius.circular(12), border: Border.all(color: c.border),
+            boxShadow: [BoxShadow(color: c.shadow, blurRadius: 16, offset: const Offset(0, 5))],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Expanded(child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                child: Container(
+                  decoration: BoxDecoration(gradient: gradientFor(p.name), borderRadius: BorderRadius.circular(10)),
+                  alignment: Alignment.center,
+                  child: Text(p.icon, style: const TextStyle(fontSize: 46)),
+                ),
+              )),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(13, 10, 13, 13),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, height: 1.25, color: c.text)),
+                  const SizedBox(height: 8),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Text(money(p.price), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: c.text)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(10),
+                          boxShadow: [BoxShadow(color: c.primaryD, offset: const Offset(0, 2))]),
+                      child: Text('+ Add', style: TextStyle(color: c.bg, fontWeight: FontWeight.w900, fontSize: 13)),
+                    ),
+                  ]),
+                ]),
+              ),
+            ]),
+            if (p.popular) Positioned(top: 7, left: 7, child: _badge('★ HOT', const Color(0xFFFB7185), Colors.white)),
+            if (inCart) Positioned(top: 7, right: 7, child: _badge('✓ Added', c.cyan, c.bg)),
+            if (soldOut) Positioned(left: 0, right: 0, top: 0, bottom: 0, child: Center(
+              child: Container(width: double.infinity, color: Colors.black.withValues(alpha: 0.7), padding: const EdgeInsets.all(6),
+                  child: const Text('SOLD OUT', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1))),
+            )),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(String text, Color bg, Color fg) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+        child: Text(text, style: TextStyle(color: fg, fontSize: 10, fontWeight: FontWeight.w900)),
+      );
+
+  // ----------------------------------------------------------- cart (right)
+  Widget _cart(PosColors c) {
+    final o = _active;
+    final t = o.totals;
+    return Container(
+      width: 360,
+      decoration: BoxDecoration(color: c.panel, border: Border(left: BorderSide(color: c.border))),
+      child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 16),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
+          child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('🛍️ Order #${o.number}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: c.text)),
+            Text(_time(o.createdAt), style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+        Expanded(child: o.items.isEmpty
+            ? Center(child: Text('No items yet.\nTap a drink to add it.', textAlign: TextAlign.center,
+                style: TextStyle(color: c.textDim, fontSize: 13, fontWeight: FontWeight.w700)))
+            : ListView(padding: const EdgeInsets.all(10), children: [for (final l in o.items) _cartItem(c, l)])),
+        _cartFoot(c, o, t),
+      ]),
+    );
+  }
+
+  Widget _cartItem(PosColors c, CartLine l) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(width: 44, height: 44, alignment: Alignment.center,
+            decoration: BoxDecoration(gradient: gradientFor(l.name), borderRadius: BorderRadius.circular(9)),
+            child: Text(l.emoji, style: const TextStyle(fontSize: 22))),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(l.name, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, height: 1.3, color: c.text)),
+          if (!l.isSimple) Padding(padding: const EdgeInsets.only(top: 2),
+              child: Text('${l.size == 'L' ? 'Large' : 'Regular'} · ${l.sugar}% sugar · ${l.ice}% ice',
+                  style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w800))),
+          if (l.toppings.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2),
+              child: Text('+ ${l.toppings.map((t) => t.name).join(', ')}', style: TextStyle(fontSize: 12, color: c.primary, fontWeight: FontWeight.w800))),
+          Padding(padding: const EdgeInsets.only(top: 8), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(color: c.panel, borderRadius: BorderRadius.circular(999)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                _qtyBtn(c, '−', () => _setQty(l, l.qty - 1)),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('${l.qty}', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: c.text))),
+                _qtyBtn(c, '+', () => _setQty(l, l.qty + 1)),
+              ]),
+            ),
+            Text(money(l.lineTotal), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: c.text)),
+          ])),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _qtyBtn(PosColors c, String s, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(width: 26, height: 26, alignment: Alignment.center,
+            decoration: BoxDecoration(color: c.primary, shape: BoxShape.circle),
+            child: Text(s, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: c.bg))),
+      );
+
+  Widget _cartFoot(PosColors c, Order o, ({double sub, double discount, double taxable, double tax, double total}) t) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          _chip(c, '🏷️ ${o.discount > 0 ? (o.discountType == 'percent' ? '${o.discount.toStringAsFixed(0)}% off' : '-${money(o.discount)}') : 'Discount'}',
+              active: o.discount > 0, activeColor: c.primary, onTap: _openDiscount),
+          const SizedBox(width: 6),
+          _chip(c, '📝 ${o.note.isNotEmpty ? 'Note ✓' : 'Note'}', active: o.note.isNotEmpty, activeColor: c.cyan, onTap: _openNote),
+        ]),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+          child: Column(children: [
+            _subRow(c, 'Subtotal', money(t.sub), c.text),
+            if (t.discount > 0) _subRow(c, 'Discount', '−${money(t.discount)}', c.primary),
+            _subRow(c, 'Tax (${(ShopConfig.tax * 100).toStringAsFixed(2)}%)', money(t.tax), c.text),
+            Container(
+              margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.only(top: 8),
+              decoration: BoxDecoration(border: Border(top: BorderSide(color: c.primary, width: 1, style: BorderStyle.solid))),
+              child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('Total', style: TextStyle(fontWeight: FontWeight.w800, color: c.text)),
+                Text(money(t.total), style: TextStyle(fontSize: 28, color: c.primary, fontWeight: FontWeight.w900)),
+              ]),
+            ),
+            Padding(padding: const EdgeInsets.only(top: 7), child: Align(alignment: Alignment.centerLeft,
+                child: Text('✨ Customer adds tip on card terminal', style: TextStyle(fontSize: 12, color: c.yellow, fontWeight: FontWeight.w800)))),
+          ]),
+        ),
+        const SizedBox(height: 10),
+        GestureDetector(
+          onTap: o.items.isEmpty ? null : () => _soon('Payment'),
+          child: Opacity(
+            opacity: o.items.isEmpty ? 0.4 : 1,
+            child: Container(
+              padding: const EdgeInsets.all(16), alignment: Alignment.center,
+              decoration: BoxDecoration(gradient: c.primaryG, borderRadius: BorderRadius.circular(12),
+                  boxShadow: [BoxShadow(color: const Color(0xFFFF9500).withValues(alpha: 0.45), blurRadius: 16, offset: const Offset(0, 4))]),
+              child: Text('💳 Pay ${money(t.total)} →', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: c.bg)),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _chip(PosColors c, String text, {required bool active, required Color activeColor, required VoidCallback onTap}) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          decoration: BoxDecoration(color: active ? activeColor : c.card, borderRadius: BorderRadius.circular(999)),
+          child: Text(text, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: active ? c.bg : c.text)),
+        ),
+      );
+
+  Widget _subRow(PosColors c, String k, String v, Color vColor) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(k, style: TextStyle(fontSize: 14, color: c.textMute, fontWeight: FontWeight.w800)),
+          Text(v, style: TextStyle(fontSize: 14, color: vColor, fontWeight: FontWeight.w800)),
+        ]),
+      );
+
+  void _soon(String what) => ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$what — dựng ở bước kế (4b/4c)'), duration: const Duration(seconds: 1)));
+
+  String _time(String iso) {
+    final d = DateTime.tryParse(iso)?.toLocal();
+    if (d == null) return '';
+    final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    return '$h:${d.minute.toString().padLeft(2, '0')} ${d.hour < 12 ? 'AM' : 'PM'}';
+  }
+}
+
+// ============================================================================
+// CUSTOMIZE SHEET — size / sugar / ice / toppings. Port of CustomizeModal.
+// ============================================================================
+class _CustomizeSheet extends StatefulWidget {
+  final MenuItem product;
+  final List<Topping> toppings;
+  const _CustomizeSheet({required this.product, required this.toppings});
+  @override
+  State<_CustomizeSheet> createState() => _CustomizeSheetState();
+}
+
+class _CustomizeSheetState extends State<_CustomizeSheet> {
+  String _size = 'R';
+  int _sugar = 100, _ice = 100;
+  final List<Topping> _sel = [];
+
+  double get _total {
+    var p = widget.product.price + (_size == 'L' ? ShopConfig.sizeLargeBonus : 0);
+    p += _sel.fold(0.0, (s, t) => s + t.price);
+    return p;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final p = widget.product;
+    return _PosDialog(
+      maxWidth: 520, padding: EdgeInsets.zero,
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(height: 140, decoration: BoxDecoration(gradient: gradientFor(p.name)),
+            alignment: Alignment.center, child: Text(p.icon, style: const TextStyle(fontSize: 80))),
+        Flexible(child: SingleChildScrollView(padding: const EdgeInsets.fromLTRB(22, 18, 22, 8), child:
+          Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(p.name, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text)),
+            Padding(padding: const EdgeInsets.only(top: 4),
+                child: Text('Base: ${money(p.price)}', style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
+            _label(c, 'SIZE'),
+            Row(children: [
+              _seg(c, 'Regular', _size == 'R', () => setState(() => _size = 'R')),
+              const SizedBox(width: 8),
+              _seg(c, 'Large  +${money(ShopConfig.sizeLargeBonus)}', _size == 'L', () => setState(() => _size = 'L')),
+            ]),
+            _label(c, 'SUGAR'),
+            Row(children: [for (final v in const [0,25,50,75,100]) ...[_seg(c, '$v%', _sugar == v, () => setState(() => _sugar = v), small: true), if (v != 100) const SizedBox(width: 6)]]),
+            _label(c, 'ICE'),
+            Row(children: [for (final v in const [0,25,50,75,100]) ...[_seg(c, '$v%', _ice == v, () => setState(() => _ice = v), small: true), if (v != 100) const SizedBox(width: 6)]]),
+            if (widget.toppings.isNotEmpty) ...[
+              _label(c, 'ADD TOPPINGS'),
+              Wrap(spacing: 6, runSpacing: 6, children: [for (final t in widget.toppings) _toppingChip(c, t)]),
+            ],
+            const SizedBox(height: 8),
+          ]),
+        )),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(border: Border(top: BorderSide(color: c.border))),
+          child: Row(children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text('Item total', style: TextStyle(fontSize: 12, color: c.textMute)),
+              Text(money(_total), style: TextStyle(fontSize: 26, color: c.primary, fontWeight: FontWeight.w900)),
+            ]),
+            const Spacer(),
+            PButton(const Text('Add to Order'), size: PBtnSize.lg, onPressed: () {
+              Navigator.of(context).pop(CartLine(
+                id: 'L${DateTime.now().microsecondsSinceEpoch}',
+                productId: p.id, name: p.name, emoji: p.icon, category: p.category,
+                size: _size, sugar: _sugar, ice: _ice, toppings: List.of(_sel), basePrice: p.price));
+            }),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _toppingChip(PosColors c, Topping t) {
+    final active = _sel.any((x) => x.id == t.id);
+    return GestureDetector(
+      onTap: () => setState(() { active ? _sel.removeWhere((x) => x.id == t.id) : _sel.add(t); }),
+      child: Container(
+        width: 152, padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: active ? c.cyan : c.card, borderRadius: BorderRadius.circular(12),
+          boxShadow: active ? [BoxShadow(color: c.cyanD, offset: const Offset(0, 3))] : null,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(t.name, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: active ? c.bg : c.text)),
+          Padding(padding: const EdgeInsets.only(top: 2),
+              child: Text('+${money(t.price)}', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: active ? c.bg : c.textMute))),
+        ]),
+      ),
+    );
+  }
+}
+
+Widget _label(PosColors c, String t) => Padding(
+      padding: const EdgeInsets.only(top: 18, bottom: 8),
+      child: Text(t, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: c.textMute, letterSpacing: 1)),
+    );
+
+Widget _seg(PosColors c, String label, bool active, VoidCallback onTap, {bool small = false}) => Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: small ? 8 : 12, horizontal: 4),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? c.primary : c.card, borderRadius: BorderRadius.circular(10),
+            boxShadow: active ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 3))] : null,
+          ),
+          child: Text(label, textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: small ? 12 : 14, color: active ? c.bg : c.text)),
+        ),
+      ),
+    );
+
+// ============================================================================
+// DISCOUNT DIALOG — manager-gated. Port of DiscountModal.
+// ============================================================================
+class _DiscountDialog extends StatefulWidget {
+  final Order order;
+  const _DiscountDialog({required this.order});
+  @override
+  State<_DiscountDialog> createState() => _DiscountDialogState();
+}
+
+class _DiscountDialogState extends State<_DiscountDialog> {
+  String _type = 'amount';
+  final _value = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return _PosDialog(maxWidth: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('🏷️ Apply Discount', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: c.text)),
+      const SizedBox(height: 14),
+      Container(
+        padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10)),
+        child: Row(children: [
+          _seg(c, '\$ Amount', _type == 'amount', () => setState(() => _type = 'amount')),
+          const SizedBox(width: 6),
+          _seg(c, '% Percent', _type == 'percent', () => setState(() => _type = 'percent')),
+        ]),
+      ),
+      const SizedBox(height: 14),
+      PField(label: _type == 'amount' ? 'Discount Amount (\$)' : 'Discount Percentage (%)',
+          child: PInput(controller: _value, hintText: _type == 'amount' ? '0.00' : '10', keyboardType: TextInputType.number)),
+      Row(children: [
+        Expanded(flex: 1, child: PButton(const Text('Remove'), variant: PBtnVariant.ghost, expand: true,
+            onPressed: () => Navigator.of(context).pop((value: 0.0, type: 'amount')))),
+        const SizedBox(width: 8),
+        Expanded(flex: 2, child: PButton(const Text('Apply'), expand: true,
+            onPressed: () => Navigator.of(context).pop((value: double.tryParse(_value.text) ?? 0, type: _type)))),
+      ]),
+    ]));
+  }
+}
+
+// ============================================================================
+// NOTE DIALOG — port of NoteModal.
+// ============================================================================
+class _NoteDialog extends StatefulWidget {
+  final String initial;
+  const _NoteDialog({required this.initial});
+  @override
+  State<_NoteDialog> createState() => _NoteDialogState();
+}
+
+class _NoteDialogState extends State<_NoteDialog> {
+  late final _note = TextEditingController(text: widget.initial);
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return _PosDialog(maxWidth: 420, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('📝 Order Note', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: c.text)),
+      const SizedBox(height: 14),
+      Text('NOTE (VISIBLE ON RECEIPT)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: c.textMute, letterSpacing: .5)),
+      const SizedBox(height: 6),
+      TextField(
+        controller: _note, maxLines: 4, autofocus: true,
+        style: TextStyle(color: c.text, fontSize: 14, fontWeight: FontWeight.w700), cursorColor: c.primary,
+        decoration: InputDecoration(
+          hintText: 'e.g., No straw, customer allergic to dairy...',
+          hintStyle: TextStyle(color: c.textDim, fontWeight: FontWeight.w700),
+          filled: true, fillColor: c.card,
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.border)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: c.primary)),
+        ),
+      ),
+      const SizedBox(height: 14),
+      PButton(const Text('Save Note'), expand: true, onPressed: () => Navigator.of(context).pop(_note.text)),
+    ]));
+  }
+}
+
+// ============================================================================
+// POS DIALOG SHELL — centered dark card + close button. Port of Modal/ModalClose.
+// ============================================================================
+class _PosDialog extends StatelessWidget {
+  final Widget child;
+  final double maxWidth;
+  final EdgeInsets padding;
+  const _PosDialog({required this.child, this.maxWidth = 540, this.padding = const EdgeInsets.all(24)});
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return Dialog(
+      backgroundColor: Colors.transparent, insetPadding: const EdgeInsets.all(20),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: MediaQuery.of(context).size.height * 0.9),
+        child: Stack(children: [
+          Container(
+            decoration: BoxDecoration(color: c.panel, borderRadius: BorderRadius.circular(18),
+                boxShadow: const [BoxShadow(color: Color(0x80000000), blurRadius: 60, offset: Offset(0, 20))]),
+            clipBehavior: Clip.antiAlias,
+            padding: padding,
+            child: child,
+          ),
+          Positioned(top: 14, right: 14, child: GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            child: Container(width: 34, height: 34, alignment: Alignment.center,
+                decoration: BoxDecoration(color: c.card, shape: BoxShape.circle),
+                child: Icon(Icons.close, size: 18, color: c.text)),
+          )),
+        ]),
+      ),
+    );
+  }
+}
