@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
+import '../hardware.dart';
 import '../menu.dart' hide CartLine;
 import '../pax.dart';
 import '../printer.dart';
@@ -36,6 +37,10 @@ class _OrderViewState extends State<OrderView> {
     _load();
   }
 
+  // Hardware config (cash drawer) loaded from settings.
+  String _drawerMode = 'android_intent';
+  String _drawerHost = '';
+
   Future<void> _load() async {
     await OrderCounter.init();
     await repo.load();
@@ -46,12 +51,30 @@ class _OrderViewState extends State<OrderView> {
       repo.items = List.of(kDefaultMenu);
     }
     if (repo.taxRate > 0) ShopConfig.tax = repo.taxRate;
+    // Shop pricing + cash-drawer config from settings.
+    final s = await Api.instance.getSettings();
+    final settings = Map<String, dynamic>.from(s['settings'] ?? {});
+    final shop = Map<String, dynamic>.from(settings['shop'] ?? {});
+    final hw = Map<String, dynamic>.from(settings['hardware'] ?? {});
+    if (shop['currencySymbol'] != null) ShopConfig.currencySymbol = shop['currencySymbol'].toString();
+    if (shop['sizeLargeBonus'] != null) ShopConfig.sizeLargeBonus = (shop['sizeLargeBonus'] as num).toDouble();
+    _drawerMode = (hw['cashDrawerMode'] ?? 'android_intent').toString();
+    _drawerHost = (hw['printerHost'] ?? '').toString();
     if (!mounted) return;
     setState(() {
       _orders = [emptyOrder()];
       _activeId = _orders.first.id;
       _loading = false;
     });
+  }
+
+  Future<void> _kickDrawer() async {
+    try {
+      final r = await CashDrawer.open(mode: _drawerMode, printerHost: _drawerHost.isEmpty ? null : _drawerHost);
+      if (r['skipped'] != true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cash drawer opened'), duration: Duration(seconds: 1)));
+      }
+    } catch (_) {}
   }
 
   Order get _active => _orders.firstWhere((o) => o.id == _activeId, orElse: () => _orders.first);
@@ -63,7 +86,7 @@ class _OrderViewState extends State<OrderView> {
     setState(() { _orders.insert(0, o); _activeId = o.id; });
   }
 
-  void _addLine(CartLine l) => _updateActive(() => _active.items.add(l));
+  void _addLine(CartLine l) { _updateActive(() => _active.items.add(l)); _pushDisplay(_active); }
 
   Future<void> _addProduct(MenuItem p) async {
     if (!p.sellable) return;
@@ -114,14 +137,28 @@ class _OrderViewState extends State<OrderView> {
     if (note != null) _updateActive(() => _active.note = note);
   }
 
+  void _pushDisplay(Order o, {String state = 'order'}) {
+    final t = o.totals;
+    CustomerDisplay.update({
+      'state': state, 'shop': {'name': Api.instance.storeName}, 'orderNumber': o.number,
+      'total': t.total, 'subtotal': t.sub, 'tax': t.tax,
+      'items': o.items.map((l) => {'name': l.name, 'emoji': l.emoji, 'qty': l.qty, 'total': l.lineTotal,
+        'details': l.isSimple ? '' : '${l.size == 'L' ? 'Large' : 'Reg'} · ${l.sugar}% sugar · ${l.ice}% ice'}).toList(),
+    });
+  }
+
   Future<void> _openPayment() async {
     final o = _active;
+    _pushDisplay(o, state: 'payment'); // mirror amount due on the 2nd screen
     final pay = await showDialog<Map<String, dynamic>>(
       context: context, barrierColor: PT.c.overlay,
       builder: (_) => _PaymentSheet(order: o),
     );
-    if (pay == null || !mounted) return;
+    if (pay == null || !mounted) { _pushDisplay(o); return; }
     final tip = (pay['tip'] ?? 0.0) as double;
+    // Cash with change → pop the drawer.
+    if (pay['method'] == 'cash' && ((pay['changeGiven'] ?? 0.0) as double) > 0) _kickDrawer();
+    CustomerDisplay.update({'state': 'done', 'total': o.totals.total + tip, 'shop': {'name': Api.instance.storeName}});
     // Persist the completed order to the cloud (best-effort), print kitchen ticket.
     Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
     try {
@@ -153,6 +190,7 @@ class _OrderViewState extends State<OrderView> {
         l.qty = qty;
       }
     });
+    _pushDisplay(_active);
   }
 
   List<MenuItem> get _visible => repo.items.where((m) {
@@ -257,15 +295,18 @@ class _OrderViewState extends State<OrderView> {
             ]),
           )),
           const SizedBox(width: 10),
-          // Open Cash Drawer (wired to hardware in the Cash Drawer settings step)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-            decoration: BoxDecoration(color: c.primaryA, borderRadius: BorderRadius.circular(999), border: Border.all(color: c.primary)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.inventory_2_outlined, size: 14, color: c.primary),
-              const SizedBox(width: 7),
-              Text('Open Cash Drawer', style: TextStyle(color: c.primary, fontWeight: FontWeight.w900, fontSize: 13)),
-            ]),
+          // Open Cash Drawer — wired to the hardware bridge (vido/cashdrawer).
+          GestureDetector(
+            onTap: _kickDrawer,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              decoration: BoxDecoration(color: c.primaryA, borderRadius: BorderRadius.circular(999), border: Border.all(color: c.primary)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.inventory_2_outlined, size: 14, color: c.primary),
+                const SizedBox(width: 7),
+                Text('Open Cash Drawer', style: TextStyle(color: c.primary, fontWeight: FontWeight.w900, fontSize: 13)),
+              ]),
+            ),
           ),
         ]),
       ),
@@ -787,13 +828,22 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   // terminal config (for card)
   String _termIp = '';
   int _termPort = 10009;
+  String _termMode = 'tcp'; // tcp | usb | serial
+  String _termSerial = '';
 
   @override
   void initState() {
     super.initState();
     Api.instance.getSettings().then((s) {
       final pay = Map<String, dynamic>.from(Map<String, dynamic>.from(s['settings'] ?? {})['payment'] ?? {});
-      if (mounted) setState(() { _termIp = (pay['ip'] ?? '').toString(); _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009; });
+      if (mounted) {
+        setState(() {
+        _termIp = (pay['ip'] ?? '').toString();
+        _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009;
+        _termMode = (pay['connectionMode'] ?? 'tcp').toString();
+        _termSerial = (pay['terminalSerial'] ?? '').toString();
+        });
+      }
     });
   }
 
@@ -818,7 +868,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       ] else if (_method == 'cash')
         _CashFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
       else if (_method == 'card')
-        _PaxFlow(order: widget.order, host: _termIp, port: _termPort, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
+        _PaxFlow(order: widget.order, mode: _termMode, host: _termIp, port: _termPort, serial: _termSerial,
+            onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
       else
         _GiftCardFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r)),
     ]));
@@ -946,11 +997,11 @@ class _GiftCardFlow extends StatelessWidget {
 // === PAX (card) FLOW ===
 class _PaxFlow extends StatefulWidget {
   final Order order;
-  final String host;
+  final String mode, host, serial;
   final int port;
   final VoidCallback onBack;
   final ValueChanged<Map<String, dynamic>> onDone;
-  const _PaxFlow({required this.order, required this.host, required this.port, required this.onBack, required this.onDone});
+  const _PaxFlow({required this.order, required this.mode, required this.host, required this.port, required this.serial, required this.onBack, required this.onDone});
   @override
   State<_PaxFlow> createState() => _PaxFlowState();
 }
@@ -969,8 +1020,9 @@ class _PaxFlowState extends State<_PaxFlow> {
   Future<void> _run() async {
     setState(() { _busy = true; _result = null; _error = null; });
     try {
-      final r = await Pax.sale(amount: widget.order.totals.total, host: widget.host.isEmpty ? null : widget.host,
-          port: widget.port, refNum: 'BB${widget.order.number}');
+      final r = await Pax.sale(amount: widget.order.totals.total, connectionMode: widget.mode,
+          host: widget.host.isEmpty ? null : widget.host, port: widget.port, terminalSerial: widget.serial,
+          refNum: 'BB${widget.order.number}');
       if (!mounted) return;
       setState(() { _busy = false; _result = r; });
     } catch (e) {
@@ -989,7 +1041,9 @@ class _PaxFlowState extends State<_PaxFlow> {
       Padding(padding: const EdgeInsets.only(top: 10),
           child: Text('Card Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
       Padding(padding: const EdgeInsets.only(top: 4),
-          child: Text(widget.host.isEmpty ? 'No terminal — simulated card payment' : 'Customer is using the card terminal',
+          child: Text((widget.mode == 'tcp' && widget.host.isEmpty)
+                  ? 'No terminal — simulated card payment'
+                  : 'Customer is using the card terminal (${widget.mode.toUpperCase()})',
               style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
       _payTotalBox(c, 'Amount due', t.total),
       if (_busy) _statusCard(c, '💳', 'Waiting for card', 'Customer: insert, tap, or swipe', animated: true),

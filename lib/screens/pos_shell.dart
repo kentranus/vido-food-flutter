@@ -3,6 +3,7 @@ import '../api.dart';
 import '../services/staff_store.dart';
 import '../pos/order_view.dart';
 import '../pos/online_orders.dart';
+import '../pos/order_models.dart' show money;
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 
@@ -56,6 +57,7 @@ class _PosShellState extends State<PosShell> {
   String _settingsTab = 'pax';
   bool _menuOpen = false;
   bool _userMenuOpen = false;
+  bool _panelOpen = false;
   final ctrl = OnlineOrdersController();
 
   @override
@@ -88,12 +90,14 @@ class _PosShellState extends State<PosShell> {
               _topBar(c),
               Expanded(child: _content(c)),
             ]),
-            // click-outside overlay for open dropdowns
-            if (_menuOpen || _userMenuOpen)
+            // click-outside overlay for open dropdowns / panel
+            if (_menuOpen || _userMenuOpen || _panelOpen)
               Positioned.fill(child: GestureDetector(
                 behavior: HitTestBehavior.translucent,
-                onTap: () => setState(() { _menuOpen = false; _userMenuOpen = false; }),
+                onTap: () => setState(() { _menuOpen = false; _userMenuOpen = false; _panelOpen = false; }),
               )),
+            // slide-in "Incoming orders" panel (hybrid — handle online/kiosk fast)
+            _incomingPanel(c),
             if (_menuOpen) _mainMenu(c),
             if (_userMenuOpen) _userMenu(c),
             // Full-screen takeover for the front NEW online order (any view).
@@ -156,6 +160,26 @@ class _PosShellState extends State<PosShell> {
             Text('Payment Offline', style: TextStyle(color: c.red, fontWeight: FontWeight.w800, fontSize: 12)),
           ]),
         ),
+        const SizedBox(width: 8),
+        // incoming-orders bell + pending badge → slide-in panel (hybrid)
+        AnimatedBuilder(animation: ctrl, builder: (context, _) {
+          final pending = ctrl.orders.length;
+          final newCount = ctrl.queue.length;
+          return GestureDetector(
+            onTap: () => setState(() { _panelOpen = !_panelOpen; _menuOpen = false; _userMenuOpen = false; }),
+            child: Stack(clipBehavior: Clip.none, children: [
+              Container(width: 36, height: 36, alignment: Alignment.center,
+                  decoration: BoxDecoration(color: c.card, shape: BoxShape.circle),
+                  child: Icon(Icons.notifications, size: 18, color: pending > 0 ? c.primary : c.textMute)),
+              if (pending > 0) Positioned(top: -4, right: -4, child: Container(
+                constraints: const BoxConstraints(minWidth: 18), height: 18, alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(color: newCount > 0 ? const Color(0xFFFF6A00) : c.green, shape: BoxShape.rectangle, borderRadius: BorderRadius.circular(999)),
+                child: Text('$pending', style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
+              )),
+            ]),
+          );
+        }),
         const SizedBox(width: 8),
         // theme toggle
         _circleBtn(c, PT.isDark.value ? Icons.dark_mode : Icons.light_mode, () => PT.toggle()),
@@ -318,6 +342,82 @@ class _PosShellState extends State<PosShell> {
             Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color ?? c.text)),
           ]),
         ),
+      );
+
+  // ------------------------------------------------ incoming orders panel (5b)
+  Widget _incomingPanel(PosColors c) {
+    const w = 360.0;
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 220), curve: Curves.easeOut,
+      top: 0, bottom: 0, right: _panelOpen ? 0 : -w, width: w,
+      child: Material(
+        color: c.panel, elevation: 16,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 12, 14),
+            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Incoming orders', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: c.text)),
+                Text('Online & kiosk · handle without leaving Sell', style: TextStyle(fontSize: 11, color: c.textMute, fontWeight: FontWeight.w600)),
+              ])),
+              GestureDetector(onTap: () => setState(() => _panelOpen = false),
+                  child: Icon(Icons.close, size: 20, color: c.textMute)),
+            ]),
+          ),
+          Expanded(child: AnimatedBuilder(animation: ctrl, builder: (context, _) {
+            final list = ctrl.orders;
+            if (list.isEmpty) {
+              return Center(child: Padding(padding: const EdgeInsets.all(24),
+                  child: Text('No incoming orders.\nOnline & kiosk orders appear here.', textAlign: TextAlign.center,
+                      style: TextStyle(color: c.textDim, fontWeight: FontWeight.w700))));
+            }
+            return ListView(padding: const EdgeInsets.all(12), children: [for (final o in list) _panelCard(c, o)]);
+          })),
+          Padding(padding: const EdgeInsets.all(12), child: PButton(const Text('Open full board'), variant: PBtnVariant.ghost, expand: true,
+              onPressed: () => setState(() { _panelOpen = false; _view = 'board'; }))),
+        ]),
+      ),
+    );
+  }
+
+  Widget _panelCard(PosColors c, OnlineOrder o) {
+    final col = columnOf(o.status, o.source) ?? 'new';
+    final sm = sourceMeta(o.source);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(color: sm.color, borderRadius: BorderRadius.circular(6)),
+              child: Text(sm.label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10))),
+          const SizedBox(width: 8),
+          Text('#${o.number ?? o.id}', style: TextStyle(fontWeight: FontWeight.w900, color: c.text)),
+          const Spacer(),
+          Text(money(o.total), style: TextStyle(fontWeight: FontWeight.w900, color: c.text)),
+        ]),
+        const SizedBox(height: 6),
+        Text(o.items.map((i) => '${i.quantity}× ${i.name}').join(', '), maxLines: 2, overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.textMute)),
+        const SizedBox(height: 10),
+        if (col == 'new') Row(children: [
+          Expanded(child: _pBtn(c, 'Reject', c.red, c.redA, () => ctrl.reject(o, 'Too busy'))),
+          const SizedBox(width: 8),
+          Expanded(flex: 2, child: _pBtn(c, 'Accept (15m)', c.bg, c.green, () => ctrl.accept(o, 15), filled: true)),
+        ])
+        else if (col == 'preparing') _pBtn(c, 'Mark ready', c.bg, c.primary, () => ctrl.markReady(o), filled: true)
+        else _pBtn(c, 'Complete', c.bg, c.green, () => ctrl.complete(o), filled: true),
+      ]),
+    );
+  }
+
+  Widget _pBtn(PosColors c, String label, Color fg, Color bg, VoidCallback onTap, {bool filled = false}) => GestureDetector(
+        onTap: onTap,
+        child: Container(padding: const EdgeInsets.symmetric(vertical: 10), alignment: Alignment.center,
+            decoration: BoxDecoration(color: filled ? bg : bg, borderRadius: BorderRadius.circular(10),
+                border: filled ? null : Border.all(color: fg)),
+            child: Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w900, fontSize: 13))),
       );
 
   // ----------------------------------------------------------------- content

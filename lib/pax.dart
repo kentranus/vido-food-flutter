@@ -34,29 +34,34 @@ class Pax {
   static const _ch = MethodChannel('vido/pax');
   static bool get _native => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-  /// Run a CREDIT SALE. Throws [PaxException] on terminal error / decline-as-error;
-  /// returns a [PaxResult] (approved may be false for a normal decline).
+  /// Run a CREDIT SALE. [connectionMode] = 'tcp' | 'usb' | 'serial' (USB/serial
+  /// don't need a host). Throws [PaxException] on terminal error; returns a
+  /// [PaxResult] (approved may be false for a normal decline).
   static Future<PaxResult> sale({
     required double amount,
+    String connectionMode = 'tcp',
     String? host,
     int port = 10009,
     int timeout = 60000,
     String? refNum,
+    String terminalSerial = '',
     String tipAmount = '',
   }) async {
     final ref = refNum ?? DateTime.now().millisecondsSinceEpoch.toString();
-    // Off-terminal demo path (no native channel or no IP yet).
-    if (!_native || (host == null || host.trim().isEmpty)) {
+    final isTcp = connectionMode == 'tcp';
+    // Off-terminal demo path: not native, OR a TCP terminal with no IP set yet.
+    if (!_native || (isTcp && (host == null || host.trim().isEmpty))) {
       return _simulate(amount, ref);
     }
     try {
       final raw = await _ch.invokeMethod('sale', {
         'amount': amount,
-        'connectionMode': 'tcp',
-        'host': host.trim(),
+        'connectionMode': connectionMode,
+        'host': host?.trim() ?? '',
         'port': port,
         'timeout': timeout,
         'refNum': ref,
+        'terminalSerial': terminalSerial,
         'tipAmount': tipAmount,
         'extData': '',
       });
