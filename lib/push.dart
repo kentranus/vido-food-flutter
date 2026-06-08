@@ -6,15 +6,18 @@ import 'api.dart';
 import 'orders.dart';
 
 /// FCM "new order" push so the POS rings even when the app is closed / locked.
-/// Android-only for now (reuses google-services.json for com.vido.food);
-/// iOS needs an APNs cert + Apple Developer, so it no-ops there and on web.
+/// Android (google-services.json) + iOS (GoogleService-Info.plist + APNs key).
+/// No-ops on web.
 ///
 /// The backend (fcm.js) sends a `notification` payload + android channel_id
 /// `orders_v2` with sound `order_alert`, so Android auto-displays the heads-up
-/// alert when the app is in the background/terminated. In the foreground we show
-/// a local notification ourselves and refresh the live orders board immediately.
+/// alert when the app is in the background/terminated. iOS shows the APNs alert
+/// natively. In the foreground we surface the alert + refresh the board.
 
 const _channelId = 'orders_v2';
+
+bool get _isAndroid => defaultTargetPlatform == TargetPlatform.android;
+bool get _isIOS => defaultTargetPlatform == TargetPlatform.iOS;
 
 /// Background/terminated message handler. Android auto-displays the server's
 /// `notification` payload on the orders_v2 channel, so this only needs to exist
@@ -24,12 +27,12 @@ Future<void> _bgHandler(RemoteMessage message) async {}
 
 final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
 
-bool get _supported => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+bool get _supported => !kIsWeb && (_isAndroid || _isIOS);
 
 bool _inited = false;
 
-/// Called once at app startup (before runApp). Initializes Firebase + the
-/// high-importance "orders_v2" channel and registers the background handler.
+/// Called once at app startup (before runApp). Initializes Firebase + (Android)
+/// the high-importance "orders_v2" channel, and registers the background handler.
 Future<void> initPush() async {
   if (!_supported || _inited) return;
   _inited = true;
@@ -37,22 +40,24 @@ Future<void> initPush() async {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_bgHandler);
 
-    // High-importance channel with the custom bell. A channel's sound is locked
-    // once created, so the id matches the server's (orders_v2) — never reuse an
-    // old default-sound id. sound = raw resource name (res/raw/order_alert.wav).
-    const channel = AndroidNotificationChannel(
-      _channelId, 'New orders',
-      description: 'Incoming online & kiosk orders',
-      importance: Importance.max,
-      playSound: true,
-      sound: RawResourceAndroidNotificationSound('order_alert'),
-      enableVibration: true,
-    );
-    final android = _local.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-    await android?.createNotificationChannel(channel);
-    await _local.initialize(const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    ));
+    if (_isAndroid) {
+      // High-importance channel with the custom bell. A channel's sound is locked
+      // once created, so the id matches the server's (orders_v2) — never reuse an
+      // old default-sound id. sound = raw resource name (res/raw/order_alert.wav).
+      const channel = AndroidNotificationChannel(
+        _channelId, 'New orders',
+        description: 'Incoming online & kiosk orders',
+        importance: Importance.max,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('order_alert'),
+        enableVibration: true,
+      );
+      final android = _local.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      await android?.createNotificationChannel(channel);
+      await _local.initialize(const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      ));
+    }
   } catch (e) {
     if (kDebugMode) print('[push] init failed: $e');
   }
@@ -67,6 +72,12 @@ Future<void> registerPushForStore() async {
     final settings = await fm.requestPermission(alert: true, badge: true, sound: true);
     if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
+    // iOS: show the alert as a heads-up even while the app is foregrounded
+    // (iOS suppresses notifications in foreground by default).
+    if (_isIOS) {
+      await fm.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
+    }
+
     final token = await fm.getToken();
     if (token != null && token.isNotEmpty) {
       await Api.instance.registerFcmToken(token);
@@ -78,7 +89,7 @@ Future<void> registerPushForStore() async {
     // Foreground push → show the heads-up alert + refresh the board now.
     FirebaseMessaging.onMessage.listen((msg) {
       final n = msg.notification;
-      if (n != null) {
+      if (n != null && _isAndroid) {
         _local.show(
           n.hashCode,
           n.title ?? '🔔 New online order',
