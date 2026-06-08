@@ -83,6 +83,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
       }
     }
     final top = items.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    // Net sales by hour (0..23) — mirrors React calcHourly.
+    final hours = List<double>.filled(24, 0);
+    for (final o in valid) {
+      final d = _when(o)?.toLocal();
+      if (d != null) hours[d.hour] += _d(o['total']);
+    }
+    // Revenue by category — mirrors React calcCategories (sum of line totals).
+    final cats = <String, double>{};
+    for (final o in valid) {
+      for (final it in (o['items'] ?? []) as List) {
+        final cat = (it['category'] ?? 'other').toString();
+        final q = (it['quantity'] ?? it['qty'] ?? 1);
+        final lt = it['lineTotal'] != null
+            ? _d(it['lineTotal'])
+            : _d(it['priceSnapshot'] ?? it['price']) * (q is num ? q.toDouble() : 1);
+        cats[cat] = (cats[cat] ?? 0) + lt;
+      }
+    }
+    final catEntries = cats.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
     return RefreshIndicator(
       onRefresh: _load, color: c.primary, backgroundColor: c.panel,
@@ -106,6 +125,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
           _stat(c, 'Avg Order', money(avg), c.blue),
         ].expand((w) => [Expanded(child: w), const SizedBox(width: 12)]).toList()..removeLast()),
         const SizedBox(height: 14),
+        _card(c, '🕐  Sales by Hour', _hourlyChart(c, hours)),
+        const SizedBox(height: 14),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: _card(c, '🥧  Sales by Category', catEntries.isEmpty
+              ? _emptyChart(c)
+              : _categoryBars(c, catEntries))),
+          const SizedBox(width: 14),
+          Expanded(child: _card(c, '🏆  Top Sellers', top.isEmpty
+              ? _emptyChart(c)
+              : _topItemBars(c, top))),
+        ]),
+        const SizedBox(height: 14),
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(child: _card(c, 'Sales summary', Column(children: [
             _row(c, 'Gross sales', money(gross)),
@@ -121,10 +152,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
             _row(c, '🎁 Gift card', money(tender['giftcard'] ?? 0)),
           ]))),
         ]),
-        const SizedBox(height: 14),
-        _card(c, 'Top items', top.isEmpty
-            ? Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text('No sales in this range.', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w700)))
-            : Column(children: [for (final e in top.take(8)) _row(c, e.key, '${e.value} sold')])),
         const SizedBox(height: 14),
         _card(c, 'Recent orders (${orders.length})', orders.isEmpty
             ? Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text('No orders.', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w700)))
@@ -184,6 +211,88 @@ class _ReportsScreenState extends State<ReportsScreen> {
       Text(money(_d(o['total'])), style: TextStyle(fontWeight: FontWeight.w900, color: voided ? c.red : c.text)),
     ]));
   }
+
+  Widget _emptyChart(PosColors c) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        child: Center(child: Text('No sales in this range.', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w700))),
+      );
+
+  // Sales by Hour — 24 vertical bars (gradient primary→cyan), labels every 3h.
+  Widget _hourlyChart(PosColors c, List<double> hours) {
+    final max = hours.fold(0.0, (m, v) => v > m ? v : m);
+    final has = max > 0;
+    return SizedBox(
+      height: 168,
+      child: Column(children: [
+        Expanded(child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          for (int h = 0; h < 24; h++)
+            Expanded(child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1),
+              child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+                if (has && hours[h] > 0)
+                  Text(_compact(hours[h]), style: TextStyle(fontSize: 7, color: c.textDim, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Container(
+                  height: has ? (4 + (hours[h] / max) * 118) : 4,
+                  decoration: BoxDecoration(
+                    gradient: hours[h] > 0 ? LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [c.primary, c.cyan]) : null,
+                    color: hours[h] > 0 ? null : c.border,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ]),
+            )),
+        ])),
+        const SizedBox(height: 6),
+        Row(children: [
+          for (int h = 0; h < 24; h++)
+            Expanded(child: Center(child: Text(h % 3 == 0 ? '$h' : '', style: TextStyle(fontSize: 9, color: c.textDim, fontWeight: FontWeight.w700)))),
+        ]),
+      ]),
+    );
+  }
+
+  // Sales by Category — horizontal bars sorted desc, palette colors.
+  Widget _categoryBars(PosColors c, List<MapEntry<String, double>> entries) {
+    final palette = [c.primary, c.cyan, c.yellow, const Color(0xFFA855F7), const Color(0xFFEC4899), const Color(0xFFFB923C)];
+    final max = entries.first.value <= 0 ? 1 : entries.first.value;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      for (int i = 0; i < entries.length; i++)
+        Padding(padding: const EdgeInsets.only(bottom: 11), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Padding(padding: const EdgeInsets.only(bottom: 5), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text(_cap(entries[i].key), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: c.text)),
+            Text(money(entries[i].value), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: c.textMute)),
+          ])),
+          ClipRRect(borderRadius: BorderRadius.circular(4), child: Stack(children: [
+            Container(height: 9, color: c.card),
+            FractionallySizedBox(widthFactor: (entries[i].value / max).clamp(0.02, 1.0), child: Container(height: 9, color: palette[i % palette.length])),
+          ])),
+        ])),
+    ]);
+  }
+
+  // Top Sellers — emoji + qty bar, top 3 highlighted.
+  Widget _topItemBars(PosColors c, List<MapEntry<String, int>> top) {
+    final max = top.first.value <= 0 ? 1 : top.first.value;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      for (int i = 0; i < top.take(8).length; i++)
+        Padding(padding: const EdgeInsets.only(bottom: 9), child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text(top[i].key, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: c.text)),
+            const SizedBox(height: 4),
+            ClipRRect(borderRadius: BorderRadius.circular(3), child: Stack(children: [
+              Container(height: 7, color: c.card),
+              FractionallySizedBox(widthFactor: (top[i].value / max).clamp(0.02, 1.0), child: Container(height: 7, color: i == 0 ? c.primary : i == 1 ? c.cyan : i == 2 ? c.yellow : c.border)),
+            ])),
+          ])),
+          const SizedBox(width: 10),
+          Text('×${top[i].value}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: c.text)),
+        ])),
+    ]);
+  }
+
+  static String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+  static String _compact(double v) => v >= 1000 ? '${(v / 1000).toStringAsFixed(1)}k' : v.toStringAsFixed(0);
 
   void _exportCsv(List<Map<String, dynamic>> orders) {
     final b = StringBuffer('Order #,Date,Type,Items,Subtotal,Tax,Tip,Total,Payment,Status\n');
