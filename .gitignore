@@ -43,3 +43,21 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# secrets / credentials — NEVER commit these
+.env
+.env.*
+google-services.json
+GoogleService-Info.plist
+**/GoogleService-Info.plist
+*.p8
+*.p12
+*.pem
+*.keystore
+*.jks
+*.mobileprovision
+**/fcm-service-account.json
+*service-account*.json
+*-credentials.json
+secrets/
+.secrets/
