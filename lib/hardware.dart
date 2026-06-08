@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -35,6 +36,41 @@ class CashDrawer {
     try {
       final r = await _ch.invokeMethod('listUsbDevices');
       return ((Map<String, dynamic>.from(r as Map)['devices'] ?? []) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } catch (_) { return []; }
+  }
+}
+
+/// Customer-facing second screen (order summary + total). Mirrors the React
+/// customerDisplayBridge. No-ops off-Android.
+class CustomerDisplay {
+  static const _ch = MethodChannel('vido/customerdisplay');
+  static bool get _native => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  static Future<bool> show() async {
+    if (!_native) return false;
+    try {
+      final r = await _ch.invokeMethod('show');
+      return (r as Map)['ok'] == true;
+    } catch (_) { return false; }
+  }
+
+  static Future<void> hide() async {
+    if (!_native) return;
+    try { await _ch.invokeMethod('hide'); } catch (_) {}
+  }
+
+  /// Push a state to the second screen. [state] is 'idle'|'order'|'payment'|'done'.
+  static Future<void> update(Map<String, dynamic> data) async {
+    if (!_native) return;
+    try { await _ch.invokeMethod('update', {'json': jsonEncode(data)}); } catch (_) {}
+  }
+
+  static Future<List<Map<String, dynamic>>> listDisplays() async {
+    if (!_native) return [];
+    try {
+      final r = await _ch.invokeMethod('listDisplays');
+      return ((Map<String, dynamic>.from(r as Map)['displays'] ?? []) as List)
           .map((e) => Map<String, dynamic>.from(e as Map)).toList();
     } catch (_) { return []; }
   }

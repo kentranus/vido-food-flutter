@@ -329,8 +329,24 @@ class _DisplaySectionState extends State<_DisplaySection> {
     if (!mounted) return;
     setState(() => _busy = false);
     final ok = r['ok'] == true;
+    // Reflect the toggle on the attached second screen immediately.
+    if (_enabled) {
+      await CustomerDisplay.show();
+      await CustomerDisplay.update({'state': 'idle', 'shop': {'name': _brand.text.trim()}});
+    } else {
+      await CustomerDisplay.hide();
+    }
+    if (!mounted) return;
     _toast(context, ok);
     if (ok) await widget.onSaved();
+  }
+
+  Future<void> _test() async {
+    final shown = await CustomerDisplay.show();
+    if (!mounted) return;
+    if (!shown) { _toast(context, false, 'No second screen detected (connect an HDMI/USB-C display)'); return; }
+    await CustomerDisplay.update({'state': 'idle', 'shop': {'name': _brand.text.trim()}});
+    if (mounted) _toast(context, true, 'Showing on second screen');
   }
 
   @override
@@ -344,6 +360,9 @@ class _DisplaySectionState extends State<_DisplaySection> {
           _field('Welcome subtitle', _subtitle, hint: 'Order when you are ready'),
           _field('Footer text', _footer, hint: 'Thank you for supporting us'),
           _saveBtn(_busy, _save),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: _test, icon: const Icon(Icons.cast), label: const Text('Test on second screen'),
+            style: OutlinedButton.styleFrom(foregroundColor: C.ink, side: const BorderSide(color: C.border), minimumSize: const Size.fromHeight(46))),
         ],
       );
 }
