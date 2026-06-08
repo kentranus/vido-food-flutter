@@ -189,6 +189,10 @@ class Api {
     return {'ok': true};
   }
 
+  /// Forgot password — server emails a new temp password. Generic response.
+  Future<Map<String, dynamic>> forgotPassword(String email) =>
+      _post('/api/auth/forgot-password', {'email': email.trim()}, auth: false);
+
   Future<void> logout() async {
     try { await _post('/api/auth/logout', {}); } catch (_) {}
     token = '';

@@ -2,12 +2,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'theme.dart';
-import 'screens.dart';
+import 'screens.dart' hide LicenseLockScreen;
 import 'orders.dart';
 import 'pos_sell.dart';
 import 'reports.dart';
 import 'kiosk.dart';
 import 'push.dart';
+import 'services/staff_store.dart';
+import 'screens/cloud_login.dart';
+import 'screens/license_lock.dart';
+import 'screens/pin_lock.dart';
+import 'screens/pos_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +47,7 @@ class _RootGateState extends State<RootGate> {
   bool _licAllowed = true;
   String _licReason = '';
   Timer? _licTimer;
+  Staff? _staff; // local staff signed in via PIN (POS only; kiosk runs unattended)
 
   @override
   void initState() {
@@ -86,32 +92,54 @@ class _RootGateState extends State<RootGate> {
   Future<void> _unlink() async {
     await Api.instance.logout();
     _licTimer?.cancel();
-    setState(() { _cloudIn = false; _licChecked = false; _licAllowed = true; });
+    StaffStore.current = null;
+    setState(() { _cloudIn = false; _licChecked = false; _licAllowed = true; _staff = null; });
   }
 
   @override
   Widget build(BuildContext context) {
+    // QA/preview hook — render a single screen by name (e.g. ?preview=pin).
+    // Only active with the explicit param; never affects the real flow.
+    final preview = Uri.base.queryParameters['preview'];
+    if (preview == 'pin') {
+      return PinLockScreen(title: 'Vido Food Demo', subtitle: 'Enter PIN to sign in', onUnlock: (_) {});
+    }
+    if (preview == 'license') {
+      return LicenseLockScreen(reason: 'expired', onRecheck: () async {}, onSwitch: () {});
+    }
+    if (preview == 'shell') {
+      return PosShell(
+        staff: Staff(id: 's1', name: 'Manager', role: 'manager', pin: '1234'),
+        onLogout: () {}, onUnlink: () {});
+    }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator(color: C.brand)));
     }
     if (!_cloudIn) {
-      return LoginScreen(onDone: () { setState(() => _cloudIn = true); _startLicense(); });
+      return CloudLoginScreen(onDone: () { setState(() => _cloudIn = true); _startLicense(); });
     }
     if (_licChecked && !_licAllowed) {
       return LicenseLockScreen(reason: _licReason, onRecheck: _runLicense, onSwitch: _unlink);
     }
+    // Kiosk runs unattended — no staff PIN.
     if (Api.instance.deviceMode == 'kiosk') {
       return KioskScreen(onExit: () async {
         await Api.instance.setDeviceMode('manage');
         if (mounted) setState(() {});
       });
     }
-    return HomeShell(
+    // Staff PIN sign-in (POS only) — mirrors React gate 3.
+    if (_staff == null) {
+      return PinLockScreen(
+        title: Api.instance.storeName.isEmpty ? 'Vido Food' : Api.instance.storeName,
+        subtitle: 'Enter PIN to sign in',
+        onUnlock: (s) => setState(() => _staff = s),
+      );
+    }
+    return PosShell(
+      staff: _staff!,
+      onLogout: () { StaffStore.current = null; setState(() => _staff = null); },
       onUnlink: _unlink,
-      onEnterKiosk: () async {
-        await Api.instance.setDeviceMode('kiosk');
-        if (mounted) setState(() {});
-      },
     );
   }
 }
