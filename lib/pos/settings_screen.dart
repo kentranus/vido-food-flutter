@@ -32,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     (id: 'menu', label: 'Menu Items', icon: Icons.restaurant),
     (id: 'staff', label: 'Staff & PINs', icon: Icons.people),
     (id: 'shop', label: 'Shop Info', icon: Icons.store),
+    (id: 'ordering', label: 'Online Ordering', icon: Icons.schedule),
     (id: 'device', label: 'Device Mode', icon: Icons.devices),
     (id: 'about', label: 'About', icon: Icons.info_outline),
   ];
@@ -90,6 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       'menu' => const _MenuTab(),
       'staff' => const _StaffTab(),
       'shop' => _ShopTab(shop: _sec('shop'), onSaved: _load),
+      'ordering' => _OrderingTab(storefront: _sec('storefront'), onSaved: _load),
       'device' => _DeviceTab(onEnterKiosk: widget.onEnterKiosk),
       _ => const _AboutTab(),
     };
@@ -623,6 +625,157 @@ class _ShopTabState extends State<_ShopTab> {
       PField(label: 'Receipt footer', child: PInput(controller: _footer, hintText: 'Thank you! Visit us again')),
       PButton(const Text('Save'), expand: true, onPressed: _busy ? null : _save),
     ]);
+  }
+}
+
+// ============================================================ Online Ordering tab
+// Drives the customer order page: business hours (per day), timezone, ASAP prep
+// estimate, schedule windows, and pickup/schedule/delivery/pause toggles.
+class _OrderingTab extends StatefulWidget {
+  final Map<String, dynamic> storefront;
+  final Future<void> Function() onSaved;
+  const _OrderingTab({required this.storefront, required this.onSaved});
+  @override
+  State<_OrderingTab> createState() => _OrderingTabState();
+}
+
+class _DayHours { bool open; String start, end; _DayHours(this.open, this.start, this.end); }
+
+class _OrderingTabState extends State<_OrderingTab> {
+  static const _dow = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  late final _tz = TextEditingController(text: '${widget.storefront['timezone'] ?? 'America/New_York'}');
+  late final _prep = TextEditingController(text: '${widget.storefront['prepMinutes'] ?? 15}');
+  late final _wake = TextEditingController(text: '${widget.storefront['scheduleWakeMinutes'] ?? 30}');
+  late int _slot = (widget.storefront['scheduleSlotMinutes'] as num?)?.toInt() ?? 15;
+  late bool _pickup = widget.storefront['pickupEnabled'] != false;
+  late bool _schedule = widget.storefront['scheduleEnabled'] != false;
+  late bool _delivery = widget.storefront['deliveryEnabled'] == true;
+  late bool _paused = widget.storefront['paused'] == true;
+  late final List<_DayHours> _hours = _initHours();
+  bool _busy = false;
+
+  List<_DayHours> _initHours() {
+    final raw = (widget.storefront['hours'] as List?) ?? [];
+    return List.generate(7, (i) {
+      final h = i < raw.length ? Map<String, dynamic>.from(raw[i]) : {};
+      return _DayHours(h['open'] == true, '${h['start'] ?? '09:00'}', '${h['end'] ?? '21:00'}');
+    });
+  }
+
+  Future<void> _pickTime(int dayIdx, bool isStart) async {
+    final cur = (isStart ? _hours[dayIdx].start : _hours[dayIdx].end).split(':');
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: int.tryParse(cur.isNotEmpty ? cur[0] : '9') ?? 9, minute: int.tryParse(cur.length > 1 ? cur[1] : '0') ?? 0),
+    );
+    if (picked == null) return;
+    final hhmm = '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+    setState(() { if (isStart) { _hours[dayIdx].start = hhmm; } else { _hours[dayIdx].end = hhmm; } });
+  }
+
+  Future<void> _save() async {
+    setState(() => _busy = true);
+    final r = await Api.instance.saveSettings({'storefront': {
+      'timezone': _tz.text.trim().isEmpty ? 'America/New_York' : _tz.text.trim(),
+      'prepMinutes': int.tryParse(_prep.text) ?? 15,
+      'scheduleWakeMinutes': int.tryParse(_wake.text) ?? 30,
+      'scheduleSlotMinutes': _slot,
+      'pickupEnabled': _pickup,
+      'scheduleEnabled': _schedule,
+      'deliveryEnabled': _delivery,
+      'paused': _paused,
+      'hours': [for (final d in _hours) {'open': d.open, 'start': d.start, 'end': d.end}],
+    }});
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _toast(context, r['ok'] == true, r['ok'] == true ? 'Saved' : 'Save failed');
+    if (r['ok'] == true) await widget.onSaved();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return ListView(padding: const EdgeInsets.all(24), children: [
+      _h(c, 'Online Ordering'),
+      Text('Controls your customer order page (order.vidofood.com). Hours decide Open/Closed and which Schedule times customers can pick.',
+          style: TextStyle(color: c.textMute, fontWeight: FontWeight.w600, fontSize: 13, height: 1.5)),
+
+      _section(c, 'Availability'),
+      _toggle(c, 'Accept Pickup orders', _pickup, (v) => setState(() => _pickup = v)),
+      _toggle(c, 'Allow Schedule for later', _schedule, (v) => setState(() => _schedule = v)),
+      _toggle(c, 'Delivery (coming soon)', _delivery, (v) => setState(() => _delivery = v)),
+      Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: _paused ? c.red.withValues(alpha: .12) : c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: _paused ? c.red : c.border)),
+        child: _toggle(c, _paused ? '⏸  PAUSED — not accepting new orders' : 'Pause new orders (when slammed)', _paused, (v) => setState(() => _paused = v)),
+      ),
+
+      _section(c, 'Timing'),
+      Row(children: [
+        Expanded(child: PField(label: 'Prep time (min)', child: PInput(controller: _prep, keyboardType: TextInputType.number, hintText: '15'))),
+        const SizedBox(width: 12),
+        Expanded(child: PField(label: 'Surface schedule before (min)', child: PInput(controller: _wake, keyboardType: TextInputType.number, hintText: '30'))),
+      ]),
+      Row(children: [
+        Expanded(child: PField(label: 'Timezone (IANA)', child: PInput(controller: _tz, hintText: 'America/New_York'))),
+        const SizedBox(width: 12),
+        Expanded(child: PField(label: 'Schedule slot', child: _slotPicker(c))),
+      ]),
+      Padding(padding: const EdgeInsets.only(top: 4), child: Text('ASAP shows "~$_asapRange min". Scheduled orders appear on the POS ${_wake.text} min before pickup.',
+          style: TextStyle(color: c.textDim, fontWeight: FontWeight.w600, fontSize: 12))),
+
+      _section(c, 'Business hours'),
+      for (int i = 0; i < 7; i++) _dayRow(c, i),
+
+      const SizedBox(height: 20),
+      PButton(_busy ? const Text('Saving…') : const Text('Save'), expand: true, onPressed: _busy ? null : _save),
+      const SizedBox(height: 30),
+    ]);
+  }
+
+  String get _asapRange { final p = int.tryParse(_prep.text) ?? 15; return '$p-${p + 5}'; }
+
+  Widget _slotPicker(PosColors c) => Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.border)),
+        child: DropdownButtonHideUnderline(child: DropdownButton<int>(
+          value: _slot, isExpanded: true, dropdownColor: c.panel, style: TextStyle(color: c.text, fontWeight: FontWeight.w700, fontSize: 13),
+          items: const [DropdownMenuItem(value: 15, child: Text('15 minutes')), DropdownMenuItem(value: 30, child: Text('30 minutes'))],
+          onChanged: (v) => setState(() => _slot = v ?? 15),
+        )),
+      );
+
+  Widget _dayRow(PosColors c, int i) {
+    final d = _hours[i];
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [
+      SizedBox(width: 96, child: Text(_dow[i], style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13))),
+      Switch(value: d.open, activeThumbColor: c.primary, onChanged: (v) => setState(() => d.open = v)),
+      const SizedBox(width: 8),
+      if (d.open) ...[
+        _timeChip(c, d.start, () => _pickTime(i, true)),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text('–', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w900))),
+        _timeChip(c, d.end, () => _pickTime(i, false)),
+      ] else
+        Text('Closed', style: TextStyle(color: c.textDim, fontWeight: FontWeight.w700, fontSize: 13)),
+    ]));
+  }
+
+  Widget _timeChip(PosColors c, String hhmm, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(8), border: Border.all(color: c.border)),
+          child: Text(_fmt12(hhmm), style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13)),
+        ),
+      );
+
+  static String _fmt12(String hhmm) {
+    final p = hhmm.split(':'); if (p.length < 2) return hhmm;
+    final h = int.tryParse(p[0]) ?? 0; final m = p[1];
+    final ap = h < 12 ? 'AM' : 'PM'; final h12 = h % 12 == 0 ? 12 : h % 12;
+    return '$h12:$m $ap';
   }
 }
 
