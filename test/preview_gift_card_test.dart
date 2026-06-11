@@ -65,6 +65,30 @@ Future<void> _enterAndCheck(WidgetTester tester, String code) async {
 void main() {
   setUpAll(_loadRealFont);
 
+  // ===== Phase D6: external scanner (keyboard-wedge) =====
+  testWidgets('D6 input auto-focus khi mở panel (scanner gõ được ngay)', (tester) async {
+    await tester.pumpWidget(_host(GiftCardCheckPanel(check: (_) async => {'ok': true})));
+    await tester.pump(const Duration(milliseconds: 300));
+    final tf = tester.widget<TextField>(find.byType(TextField));
+    expect(tf.focusNode?.hasFocus, isTrue);
+  });
+
+  testWidgets('D6 mã scan có space/newline/chữ thường được làm sạch live', (tester) async {
+    String? checkedWith;
+    await tester.pumpWidget(_host(GiftCardCheckPanel(
+        check: (code) async { checkedWith = code; return {'status': 200, 'ok': true, 'code': code, 'balance': 5.0, 'initial': 5.0}; })));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.enterText(find.byType(TextField), '  vg-8rwn-h4b3 \n');
+    await tester.pump(const Duration(milliseconds: 100));
+    final tf = tester.widget<TextField>(find.byType(TextField));
+    expect(tf.controller!.text, 'VG-8RWN-H4B3'); // sạch + uppercase ngay trong ô
+    // Enter (scanner suffix) → Check Balance tự chạy
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    for (var i = 0; i < 8; i++) { await tester.pump(const Duration(milliseconds: 100)); }
+    expect(checkedWith, 'VG-8RWN-H4B3');
+    expect(find.text('ACTIVE'), findsOneWidget);
+  });
+
   testWidgets('mask helper', (tester) async {
     expect(maskGiftCode('VG-8RWN-H4B3'), 'VG-****-H4B3');
     expect(maskGiftCode('BADCODE'), 'BADCODE');

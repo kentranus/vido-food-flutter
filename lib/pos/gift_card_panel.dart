@@ -34,6 +34,7 @@ String maskGiftCode(String code) {
 
 class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
   final _code = TextEditingController();
+  final _codeFocus = FocusNode(); // D6: auto-focus để scanner USB/BT gõ thẳng vào
   bool _busy = false;
   Map<String, dynamic>? _result;  // kết quả check gần nhất
   Map<String, dynamic>? _applied; // kết quả redeem thành công {code, applied, remaining}
@@ -42,11 +43,22 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
   @override
   void dispose() {
     _code.dispose();
+    _codeFocus.dispose();
     super.dispose();
   }
 
+  // D6: scanner dán cả space/xuống dòng — làm sạch live khi gõ/scan.
+  static String sanitizeGiftCode(String raw) => raw.toUpperCase().replaceAll(RegExp(r'\s+'), '');
+
+  void _onCodeChanged(String raw) {
+    final clean = sanitizeGiftCode(raw);
+    if (clean != raw) {
+      _code.value = TextEditingValue(text: clean, selection: TextSelection.collapsed(offset: clean.length));
+    }
+  }
+
   Future<void> _check() async {
-    final code = _code.text.trim().toUpperCase();
+    final code = sanitizeGiftCode(_code.text);
     if (code.isEmpty || _busy) return;
     setState(() { _busy = true; _result = null; _applyError = null; });
     final r = await widget.check(code);
@@ -101,9 +113,12 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       PField(label: 'Gift Card Code', child: PInput(
         controller: _code,
-        hintText: 'VG-XXXX-XXXX',
+        focusNode: _codeFocus,
+        autofocus: true, // scanner ngoài (USB/BT) gõ như bàn phím → mở panel là scan được ngay
+        hintText: 'VG-XXXX-XXXX  ·  scan or type',
         capitalization: TextCapitalization.characters,
-        onSubmitted: (_) => _check(),
+        onChanged: _onCodeChanged,
+        onSubmitted: (_) => _check(), // Enter từ scanner → Check Balance (KHÔNG auto-apply)
       )),
       PButton(
         _busy

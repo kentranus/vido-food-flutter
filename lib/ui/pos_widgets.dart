@@ -89,14 +89,19 @@ class PInput extends StatelessWidget {
   final TextCapitalization capitalization;
   final ValueChanged<String>? onSubmitted;
   final ValueChanged<String>? onChanged;
+  final FocusNode? focusNode; // D6: cho phép auto-focus (scanner gõ như bàn phím)
+  final bool autofocus;
   const PInput({super.key, this.controller, this.hintText, this.obscure = false, this.keyboardType,
-    this.capitalization = TextCapitalization.none, this.onSubmitted, this.onChanged});
+    this.capitalization = TextCapitalization.none, this.onSubmitted, this.onChanged,
+    this.focusNode, this.autofocus = false});
 
   @override
   Widget build(BuildContext context) {
     final c = PT.c;
     return TextField(
       controller: controller,
+      focusNode: focusNode,
+      autofocus: autofocus,
       obscureText: obscure,
       keyboardType: keyboardType,
       textCapitalization: capitalization,
