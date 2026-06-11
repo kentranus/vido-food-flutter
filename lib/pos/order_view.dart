@@ -1252,9 +1252,20 @@ class _ReceiptDialog extends StatelessWidget {
           row('Tax', money(t.tax)),
           if (tip > 0) row('Tip', money(tip)),
           row('TOTAL', money(grand), color: c.primary, bold: true),
-          if (isCard) row('Card', '${pay['cardType'] ?? 'CARD'} •• ${pay['cardLast4'] ?? ''}')
-          else if (cash > 0) ...[row('Cash', money(cash)), row('Change', money(change))],
-          row('Paid', (pay['method'] ?? '').toString().toUpperCase()),
+          if (order.giftApplied > 0) ...[
+            // D5: dòng gift dùng CHUNG composer với bản in → màn hình = giấy in.
+            for (final r in receiptPaymentLines(
+              paymentMethod: (pay['method'] ?? '').toString(), total: grand,
+              cashReceived: cash, change: change,
+              giftCodeMasked: order.giftCodeMasked ?? '', giftApplied: order.giftApplied,
+              giftRemaining: order.giftRemaining,
+            )) row(r[0], r[1]),
+            if (isCard) row('Card', '${pay['cardType'] ?? 'CARD'} •• ${pay['cardLast4'] ?? ''}'),
+          ] else ...[
+            if (isCard) row('Card', '${pay['cardType'] ?? 'CARD'} •• ${pay['cardLast4'] ?? ''}')
+            else if (cash > 0) ...[row('Cash', money(cash)), row('Change', money(change))],
+            row('Paid', (pay['method'] ?? '').toString().toUpperCase()),
+          ],
         ]),
       ),
       const SizedBox(height: 14),
@@ -1265,7 +1276,9 @@ class _ReceiptDialog extends StatelessWidget {
               type: orderTypeOf(order.type).label,
               items: order.items.map((l) => {'qty': l.qty, 'name': l.name, 'lineTotal': l.lineTotal}).toList(),
               subtotal: t.sub, tax: t.tax, tip: tip, total: grand,
-              paymentMethod: (pay['method'] ?? '').toString(), cashReceived: cash, change: change);
+              paymentMethod: (pay['method'] ?? '').toString(), cashReceived: cash, change: change,
+              giftCodeMasked: order.giftCodeMasked ?? '', giftApplied: order.giftApplied,
+              giftRemaining: order.giftRemaining);
           } catch (_) {}
         })),
         const SizedBox(width: 10),

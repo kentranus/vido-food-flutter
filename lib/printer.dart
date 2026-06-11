@@ -58,6 +58,38 @@ Future<void> printKitchenTicket({
   await Printing.layoutPdf(onLayout: (_) => doc.save(), name: 'kitchen-$number');
 }
 
+/// D5 — các dòng THANH TOÁN của receipt, tách thuần để test + tái dùng cho cả
+/// bản in lẫn dialog. Trả về list [label, value]. Caller chỉ được truyền mã
+/// gift ĐÃ MASK (VG-****-XXXX) — không full code, không PII.
+List<List<String>> receiptPaymentLines({
+  String paymentMethod = '',
+  double total = 0,
+  double cashReceived = 0,
+  double change = 0,
+  String giftCodeMasked = '',
+  double giftApplied = 0,
+  double giftRemaining = 0,
+}) {
+  String m(num v) => '\$${v.toStringAsFixed(2)}';
+  final rows = <List<String>>[];
+  if (giftApplied > 0 && giftCodeMasked.isNotEmpty) {
+    rows.add(['Gift Card $giftCodeMasked', '-${m(giftApplied)}']);
+    final remainder = (total - giftApplied).clamp(0, double.infinity).toDouble();
+    if (remainder > 0 && paymentMethod.isNotEmpty && paymentMethod != 'giftcard') {
+      rows.add([paymentMethod == 'cash' ? 'Cash' : 'Card', m(remainder)]);
+      if (paymentMethod == 'cash' && change > 0) rows.add(['Change', m(change)]);
+    }
+    rows.add(['Total Paid', m(total)]);
+    rows.add(['Remaining Gift Card Balance', m(giftRemaining)]);
+    rows.add(['Paid', paymentMethod == 'giftcard' ? 'GIFT CARD' : 'GIFT CARD + ${paymentMethod.toUpperCase()}']);
+  } else {
+    // Không có gift → layout cũ giữ nguyên 100%.
+    if (paymentMethod.isNotEmpty) rows.add(['Paid', paymentMethod.toUpperCase()]);
+    if (cashReceived > 0) { rows.add(['Cash', m(cashReceived)]); rows.add(['Change', m(change)]); }
+  }
+  return rows;
+}
+
 /// items: [{qty,name,lineTotal}]
 Future<void> printReceipt({
   required String storeName,
@@ -71,6 +103,9 @@ Future<void> printReceipt({
   String paymentMethod = '',
   double cashReceived = 0,
   double change = 0,
+  String giftCodeMasked = '',
+  double giftApplied = 0,
+  double giftRemaining = 0,
 }) async {
   String m(num v) => '\$${v.toStringAsFixed(2)}';
   final doc = pw.Document();
@@ -92,8 +127,10 @@ Future<void> printReceipt({
       if (tip > 0) _kv('Tip', m(tip)),
       pw.SizedBox(height: 2),
       _kv('TOTAL', m(total), bold: true),
-      if (paymentMethod.isNotEmpty) _kv('Paid', paymentMethod.toUpperCase()),
-      if (cashReceived > 0) ...[_kv('Cash', m(cashReceived)), _kv('Change', m(change))],
+      for (final r in receiptPaymentLines(
+        paymentMethod: paymentMethod, total: total, cashReceived: cashReceived, change: change,
+        giftCodeMasked: giftCodeMasked, giftApplied: giftApplied, giftRemaining: giftRemaining,
+      )) _kv(r[0], r[1]),
       _line(),
       pw.Center(child: pw.Text('Thank you!', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold))),
       pw.SizedBox(height: 20),
