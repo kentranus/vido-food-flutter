@@ -7,6 +7,7 @@ import '../services/staff_store.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 import 'default_menu.dart';
+import 'kiosk_setup.dart';
 import 'order_models.dart' show money;
 
 /// Settings — faithful port of React SettingsView (dark, left tab rail).
@@ -33,6 +34,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     (id: 'staff', label: 'Staff & PINs', icon: Icons.people),
     (id: 'shop', label: 'Shop Info', icon: Icons.store),
     (id: 'ordering', label: 'Online Ordering', icon: Icons.schedule),
+    (id: 'kiosk', label: 'Kiosk Setup', icon: Icons.storefront),
     (id: 'device', label: 'Device Mode', icon: Icons.devices),
     (id: 'about', label: 'About', icon: Icons.info_outline),
   ];
@@ -92,6 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       'staff' => const _StaffTab(),
       'shop' => _ShopTab(shop: _sec('shop'), onSaved: _load),
       'ordering' => _OrderingTab(storefront: _sec('storefront'), onSaved: _load),
+      'kiosk' => const KioskSetupPanel(),
       'device' => _DeviceTab(onEnterKiosk: widget.onEnterKiosk),
       _ => const _AboutTab(),
     };

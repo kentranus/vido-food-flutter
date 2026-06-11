@@ -6,6 +6,7 @@ import '../screens/pin_lock.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 import 'default_menu.dart';
+import 'kiosk_setup.dart';
 import 'order_models.dart';
 import 'order_view.dart' show CustomizeSheet;
 
@@ -54,14 +55,11 @@ class _KioskScreenState extends State<KioskScreen> {
       builder: (_) => PinLockScreen(title: 'Manager access', subtitle: 'Enter Manager PIN to open kiosk settings',
         managerOnly: true, onUnlock: (_) => Navigator.of(context).pop(true), onCancel: () => Navigator.of(context).pop(false))));
     if (ok == true && mounted) {
-      final exit = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-        backgroundColor: PT.c.panel,
-        title: Text('Kiosk settings', style: TextStyle(color: PT.c.text)),
-        content: Text('Exit Kiosk mode and return to POS?', style: TextStyle(color: PT.c.textMute)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Cancel', style: TextStyle(color: PT.c.textMute))),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: Text('Exit Kiosk', style: TextStyle(color: PT.c.primary, fontWeight: FontWeight.w900))),
-        ]));
+      // PIN now opens the full Kiosk Settings (kiosk PAX terminal, auto-handling,
+      // hub pairing). It pops `true` when the manager taps Exit Kiosk Mode —
+      // same exit path as the old confirm dialog.
+      final exit = await Navigator.of(context).push<bool>(MaterialPageRoute(
+          fullscreenDialog: true, builder: (_) => const KioskSettingsScreen()));
       if (exit == true) widget.onExit();
     }
   }
@@ -294,19 +292,25 @@ class _KioskPaymentState extends State<_KioskPayment> {
   bool _started = false, _busy = false;
   PaxResult? _result;
   String _termMode = 'tcp', _termIp = '', _termSerial = '';
-  int _termPort = 10009;
+  int _termPort = 10009, _termTimeout = 60000;
 
   @override
   void initState() {
     super.initState();
     Api.instance.getSettings().then((s) {
-      final pay = Map<String, dynamic>.from(Map<String, dynamic>.from(s['settings'] ?? {})['payment'] ?? {});
+      final settings = Map<String, dynamic>.from(s['settings'] ?? {});
+      final pay = Map<String, dynamic>.from(settings['payment'] ?? {});
+      // Kiosk Setup can point Pay Now at its OWN PAX terminal; when disabled the
+      // kiosk keeps using the POS Payment Settings terminal (previous behavior).
+      final kioskPax = Map<String, dynamic>.from(Map<String, dynamic>.from(settings['kiosk'] ?? {})['kioskPax'] ?? {});
+      final src = kioskPax['enabled'] == true ? kioskPax : pay;
       if (mounted) {
         setState(() {
-          _termMode = (pay['connectionMode'] ?? 'tcp').toString();
-          _termIp = (pay['ip'] ?? '').toString();
-          _termPort = int.tryParse('${pay['port'] ?? 10009}') ?? 10009;
-          _termSerial = (pay['terminalSerial'] ?? '').toString();
+          _termMode = (src['connectionMode'] ?? 'tcp').toString();
+          _termIp = (src['ip'] ?? '').toString();
+          _termPort = int.tryParse('${src['port'] ?? 10009}') ?? 10009;
+          _termSerial = (src['terminalSerial'] ?? '').toString();
+          _termTimeout = int.tryParse('${src['timeoutMs'] ?? 60000}') ?? 60000;
         });
       }
     });
@@ -318,7 +322,8 @@ class _KioskPaymentState extends State<_KioskPayment> {
     setState(() { _started = true; _busy = true; _result = null; });
     try {
       final r = await Pax.sale(amount: widget.order.totals.total + _tipAmount, connectionMode: _termMode,
-          host: _termIp.isEmpty ? null : _termIp, port: _termPort, terminalSerial: _termSerial, refNum: 'K${widget.order.number}');
+          host: _termIp.isEmpty ? null : _termIp, port: _termPort, timeout: _termTimeout,
+          terminalSerial: _termSerial, refNum: 'K${widget.order.number}');
       if (!mounted) return;
       setState(() { _busy = false; _result = r; });
     } catch (_) { if (mounted) setState(() { _busy = false; _result = PaxResult(approved: false, message: 'Terminal error'); }); }

@@ -8,6 +8,7 @@ import '../api.dart';
 import '../printer.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
+import 'kiosk_setup.dart' show kioskAutoFlag;
 import 'order_models.dart' show money;
 
 /// Online/Kiosk orders — faithful port of React views/OnlineOrders.jsx
@@ -48,26 +49,49 @@ class OnlineOrdersController extends ChangeNotifier {
   bool online = true;
 
   final _seen = <String>{};       // ids we've already alerted on
-  final _kioskPrinted = <String>{}; // kiosk ids already auto-printed
+  final _kioskPrinted = <String>{}; // ids already kitchen-printed (kiosk/auto)
+  final _receiptPrinted = <String>{}; // ids already receipt-printed (auto)
+  final _autoAccepted = <String>{};   // ids already auto-accepted
   bool _first = true;
   Timer? _poll;
+  Timer? _cfgPoll;
   http.Client? _sseClient;
   StreamSubscription? _sseSub;
   final _player = AudioPlayer();
   final _ting = AudioPlayer();
   bool _chiming = false;
 
+  // Kiosk Setup → auto-handling flags (kioskKitchen defaults ON — it was
+  // previously hardcoded; everything else defaults OFF = previous behavior).
+  Map<String, dynamic> _auto = {};
+  int _prepDefault = 15;
+  bool _flag(String k) => kioskAutoFlag(_auto, k);
+
   void start() {
     active = this;
+    _loadAutoConfig();
     refresh();
     _poll = Timer.periodic(const Duration(seconds: 15), (_) => refresh());
+    _cfgPoll = Timer.periodic(const Duration(minutes: 5), (_) => _loadAutoConfig());
     _connectSse();
+  }
+
+  Future<void> _loadAutoConfig() async {
+    if (!Api.instance.isLoggedIn) return;
+    try {
+      final s = await Api.instance.getSettings();
+      final settings = Map<String, dynamic>.from(s['settings'] ?? {});
+      _auto = Map<String, dynamic>.from(Map<String, dynamic>.from(settings['kiosk'] ?? {})['auto'] ?? {});
+      final sf = Map<String, dynamic>.from(settings['storefront'] ?? {});
+      _prepDefault = int.tryParse('${sf['prepMinutes'] ?? 15}') ?? 15;
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     if (active == this) active = null;
     _poll?.cancel();
+    _cfgPoll?.cancel();
     _sseSub?.cancel();
     _sseClient?.close();
     _player.dispose();
@@ -106,21 +130,61 @@ class OnlineOrdersController extends ChangeNotifier {
 
     final fresh = activeOrders.where((o) => columnOf(o.status, o.source) == 'new').toList();
     var hasNewOnline = false;
+    final autoOnline = _flag('onlineAccept');
     for (final o in fresh) {
-      if (!_seen.contains(o.id)) { _seen.add(o.id); if (!_first) hasNewOnline = true; }
+      if (autoOnline) {
+        // Kiosk Setup → auto-accept online orders: same accept flow as tapping
+        // Accept, no takeover/chime. Prints obey the per-source toggles.
+        _seen.add(o.id);
+        if (!_autoAccepted.contains(o.id)) { _autoAccepted.add(o.id); _autoAcceptOnline(o); }
+      } else if (!_seen.contains(o.id)) { _seen.add(o.id); if (!_first) hasNewOnline = true; }
     }
-    // Kiosk orders (already paid) → auto-print once + light ting, no takeover.
+    // Kiosk orders (already paid) → light ting once, prints per Kiosk Setup
+    // (kitchen ticket defaults ON — same as the old hardcoded behavior).
     for (final o in activeOrders) {
-      if (o.source.toLowerCase().contains('kiosk') && !_kioskPrinted.contains(o.id)) {
+      final isKiosk = o.source.toLowerCase().contains('kiosk');
+      if (isKiosk && !_kioskPrinted.contains(o.id)) {
         _kioskPrinted.add(o.id);
-        if (!_first) { _ting.play(AssetSource('sounds/order_alert.wav')); _printTicket(o); }
+        if (!_first) {
+          _ting.play(AssetSource('sounds/order_alert.wav'));
+          if (_flag('kioskKitchen')) _printTicket(o);
+          if (_flag('kioskReceipt') && !_receiptPrinted.contains(o.id)) { _receiptPrinted.add(o.id); _printCustomerReceipt(o); }
+        }
+      }
+      // Optional: also mark paid kiosk orders accepted on the backend.
+      if (isKiosk && _flag('kioskAccept') && !_first
+          && (o.status == 'new' || o.status == 'pending_accept') && !_autoAccepted.contains(o.id)) {
+        _autoAccepted.add(o.id);
+        Api.instance.accept(o.id, null);
       }
     }
     _first = false;
-    queue = fresh;
+    queue = autoOnline ? [] : fresh;
     if (hasNewOnline) _startChime();
     if (queue.isEmpty) _stopChime();
     notifyListeners();
+  }
+
+  /// Auto-accept an ONLINE order (Kiosk Setup toggle). Card capture happens on
+  /// the backend exactly like a manual Accept; kitchen/receipt prints follow
+  /// the online auto-print toggles.
+  Future<void> _autoAcceptOnline(OnlineOrder o) async {
+    final r = await Api.instance.accept(o.id, _prepDefault);
+    if (r['ok'] != true) { _autoAccepted.remove(o.id); return; } // retry next poll
+    if (_flag('onlineKitchen') && !_kioskPrinted.contains(o.id)) { _kioskPrinted.add(o.id); await _printTicket(o); }
+    if (_flag('onlineReceipt') && !_receiptPrinted.contains(o.id)) { _receiptPrinted.add(o.id); await _printCustomerReceipt(o); }
+    try { await Api.instance.markPrinted(o.id); } catch (_) {}
+    await refresh();
+  }
+
+  Future<void> _printCustomerReceipt(OnlineOrder o) async {
+    try {
+      await printReceipt(
+        storeName: Api.instance.storeName, number: o.number ?? o.id, type: o.orderType,
+        items: o.items.map((it) => {'qty': it.quantity, 'name': it.name, 'lineTotal': it.lineTotal}).toList(),
+        subtotal: o.subtotal, tax: o.tax, tip: o.tip, total: o.total,
+        paymentMethod: o.isCard || o.paymentStatus == 'paid' ? 'card' : '');
+    } catch (e) { if (kDebugMode) print('print receipt failed: $e'); }
   }
 
   void _startChime() async {

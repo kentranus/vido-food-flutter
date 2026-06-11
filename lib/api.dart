@@ -26,7 +26,8 @@ class OrderItem {
   final int quantity;
   final List<String> modifiers;
   final String notes;
-  OrderItem({required this.name, required this.quantity, required this.modifiers, required this.notes});
+  final double lineTotal;
+  OrderItem({required this.name, required this.quantity, required this.modifiers, required this.notes, this.lineTotal = 0});
   factory OrderItem.fromJson(Map<String, dynamic> j) => OrderItem(
         name: (j['nameSnapshot'] ?? j['name'] ?? 'Item').toString(),
         quantity: (j['quantity'] ?? 1) is int ? (j['quantity'] ?? 1) : int.tryParse('${j['quantity']}') ?? 1,
@@ -35,6 +36,7 @@ class OrderItem {
             .where((s) => s.isNotEmpty)
             .toList(),
         notes: (j['notes'] ?? '').toString(),
+        lineTotal: (j['lineTotal'] is num) ? (j['lineTotal'] as num).toDouble() : double.tryParse('${j['lineTotal'] ?? ''}') ?? 0,
       );
 }
 
