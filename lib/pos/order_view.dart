@@ -161,15 +161,17 @@ class _OrderViewState extends State<OrderView> {
     if (pay['method'] == 'cash' && ((pay['changeGiven'] ?? 0.0) as double) > 0) _kickDrawer();
     CustomerDisplay.update({'state': 'done', 'total': o.totals.total + tip, 'shop': {'name': Api.instance.storeName}});
     // Persist the completed order to the cloud, print kitchen ticket.
-    // Gift-card REDEEM (tiền thật đã trừ trên thẻ) → PHẢI await; nếu lưu đơn
-    // thất bại thì hoàn lại thẻ (refund idempotent theo giftRef) và giữ đơn mở.
-    if (pay['method'] == 'giftcard' && pay['giftApplied'] != null) {
+    // Đơn có gift-card REDEEM (tiền thật đã trừ trên thẻ — full HOẶC partial)
+    // → PHẢI await; lưu thất bại thì hoàn thẻ (idempotent theo giftRef), gỡ thẻ
+    // khỏi đơn và giữ đơn mở để thử lại.
+    if (o.giftApplied > 0 && o.giftCode != null && o.giftRef != null) {
       final saved = await Api.instance.createOrder(orderToApi(o,
-          paymentMethod: 'giftcard', tip: tip,
-          giftCode: pay['giftCode']?.toString(), giftApplied: (pay['giftApplied'] as num).toDouble()));
+          paymentMethod: pay['method']?.toString(), tip: tip,
+          giftCode: o.giftCodeMasked, giftApplied: o.giftApplied));
       if (saved['ok'] != true) {
-        await Api.instance.giftRefund(pay['giftCodeFull'].toString(), pay['giftRef'].toString());
+        await Api.instance.giftRefund(o.giftCode!, o.giftRef!);
         if (!mounted) return;
+        setState(o.clearGift);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Could not save the order — the gift card was NOT charged. Please try again.')));
         _pushDisplay(o);
@@ -864,33 +866,73 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     });
   }
 
+  bool _removingGift = false;
+
+  Future<void> _removeGift() async {
+    final o = widget.order;
+    if (o.giftApplied <= 0 || o.giftCode == null || o.giftRef == null || _removingGift) return;
+    setState(() => _removingGift = true);
+    // Hoàn redeem (idempotent theo giftRef) rồi mới gỡ thẻ khỏi đơn — fail thì giữ nguyên.
+    final r = await Api.instance.giftRefund(o.giftCode!, o.giftRef!);
+    if (!mounted) return;
+    if (r['ok'] == true) {
+      setState(() { o.clearGift(); _removingGift = false; });
+    } else {
+      setState(() => _removingGift = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not remove the gift card — check the connection and try again.')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = PT.c;
-    final t = widget.order.totals;
+    final o = widget.order;
+    final hasGift = o.giftApplied > 0;
     return _PosDialog(maxWidth: 540, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (_method == null) ...[
         Text('Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text)),
         Padding(padding: const EdgeInsets.only(top: 4),
-            child: Text('Order #${widget.order.number}', style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
-        _payTotalBox(c, 'Total due', t.total),
+            child: Text('Order #${o.number}', style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
+        _payTotalBox(c, hasGift ? 'Remaining due' : 'Total due', hasGift ? o.due : o.totals.total),
+        if (hasGift) GiftAppliedLine(
+          maskedCode: o.giftCodeMasked ?? '', applied: o.giftApplied, due: o.due,
+          removing: _removingGift, onRemove: _removeGift,
+        ),
         const SizedBox(height: 18),
         Row(children: [
           _payCard(c, Icons.attach_money, 'Cash', false, () => setState(() => _method = 'cash')),
           const SizedBox(width: 10),
           _payCard(c, Icons.credit_card, 'Card Payment', true, () => setState(() => _method = 'card')),
           const SizedBox(width: 10),
-          _payCard(c, Icons.smartphone, 'Gift Card', false, () => setState(() => _method = 'giftcard')),
+          // 1 thẻ / đơn trong D4 — thẻ đã áp thì nút mờ (Remove rồi mới đổi thẻ khác).
+          hasGift
+              ? Expanded(child: Opacity(opacity: .45, child: AbsorbPointer(child:
+                  _payCardBox(c, Icons.smartphone, 'Gift Card applied'))))
+              : _payCard(c, Icons.smartphone, 'Gift Card', false, () => setState(() => _method = 'giftcard')),
         ]),
       ] else if (_method == 'cash')
-        _CashFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
+        _CashFlow(order: o, due: o.due, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
       else if (_method == 'card')
-        _PaxFlow(order: widget.order, mode: _termMode, host: _termIp, port: _termPort, serial: _termSerial,
+        _PaxFlow(order: o, due: o.due, mode: _termMode, host: _termIp, port: _termPort, serial: _termSerial,
             onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r))
       else
-        _GiftCardFlow(order: widget.order, onBack: () => setState(() => _method = null), onDone: (r) => Navigator.of(context).pop(r)),
+        _GiftCardFlow(order: o,
+            onBack: () => setState(() => _method = null),
+            onDone: (r) => Navigator.of(context).pop(r),
+            onPartial: () => setState(() => _method = null)),
     ]));
   }
+
+  Widget _payCardBox(PosColors c, IconData icon, String label) => Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(14)),
+        child: Column(children: [
+          Icon(icon, size: 28, color: c.text),
+          const SizedBox(height: 8),
+          Text(label, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: c.text)),
+        ]),
+      );
 
   Widget _payCard(PosColors c, IconData icon, String label, bool highlight, VoidCallback onTap) => Expanded(
         child: GestureDetector(
@@ -934,9 +976,10 @@ Widget _backBtn(PosColors c, VoidCallback onBack, {bool enabled = true}) => Alig
 // === CASH FLOW ===
 class _CashFlow extends StatefulWidget {
   final Order order;
+  final double? due; // D4: phần còn phải thu (sau gift) — null = tổng đơn như cũ
   final VoidCallback onBack;
   final ValueChanged<Map<String, dynamic>> onDone;
-  const _CashFlow({required this.order, required this.onBack, required this.onDone});
+  const _CashFlow({required this.order, this.due, required this.onBack, required this.onDone});
   @override
   State<_CashFlow> createState() => _CashFlowState();
 }
@@ -947,7 +990,7 @@ class _CashFlowState extends State<_CashFlow> {
   @override
   Widget build(BuildContext context) {
     final c = PT.c;
-    final total = widget.order.totals.total;
+    final total = widget.due ?? widget.order.totals.total;
     final change = (_r - total).clamp(0, double.infinity).toDouble();
     final ok = _r >= total;
     final quick = <int>{total.ceil(), (total / 5).ceil() * 5, (total / 10).ceil() * 10, (total / 20).ceil() * 20}
@@ -993,7 +1036,8 @@ class _GiftCardFlow extends StatelessWidget {
   final Order order;
   final VoidCallback onBack;
   final ValueChanged<Map<String, dynamic>> onDone;
-  const _GiftCardFlow({required this.order, required this.onBack, required this.onDone});
+  final VoidCallback onPartial; // partial apply → quay lại chọn cash/card cho phần còn thiếu
+  const _GiftCardFlow({required this.order, required this.onBack, required this.onDone, required this.onPartial});
   @override
   Widget build(BuildContext context) {
     final c = PT.c;
@@ -1001,22 +1045,27 @@ class _GiftCardFlow extends StatelessWidget {
       _backBtn(c, onBack),
       Padding(padding: const EdgeInsets.only(top: 10),
           child: Text('Gift Card', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
-      _payTotalBox(c, 'Amount', order.totals.total),
+      _payTotalBox(c, 'Amount due', order.due),
       const SizedBox(height: 14),
-      // D3: check + APPLY full-cover (balance >= total). Redeem đúng số tiền đơn;
-      // idempotency/refund key theo đơn → retry không trừ đúp, fail hoàn được.
+      // D4: apply = min(balance, due). Đủ → đơn paid bằng thẻ; thiếu → ghi thẻ
+      // vào đơn rồi quay lại chọn cash/card thu phần còn lại.
       GiftCardCheckPanel(
         check: (code) => Api.instance.giftCheck(code),
         redeem: (code, amount, ref) => Api.instance.giftRedeem(code, amount, ref),
-        due: order.totals.total,
+        due: order.due,
         redeemRef: 'POS-${order.number}-${order.id}',
-        onApplied: (a) => onDone({
-          'method': 'giftcard', 'tip': 0.0,
-          'giftApplied': a['applied'], 'giftRemaining': a['remaining'],
-          'giftCode': maskGiftCode(a['code'].toString()),
-          'giftCodeFull': a['code'], // chỉ dùng nội bộ cho refund-on-fail; không in/không log
-          'giftRef': a['ref'],
-        }),
+        onApplied: (a) {
+          order.giftCode = a['code'].toString();           // RAM only — cho refund
+          order.giftCodeMasked = maskGiftCode(order.giftCode!);
+          order.giftApplied = (a['applied'] as num).toDouble();
+          order.giftRemaining = (a['remaining'] as num).toDouble();
+          order.giftRef = a['ref'].toString();
+          if (order.due <= 0.005) {
+            onDone({'method': 'giftcard', 'tip': 0.0});     // full-cover → đơn xong
+          } else {
+            onPartial();                                    // partial → chọn cash/card
+          }
+        },
       ),
       const SizedBox(height: 14),
       Text('Confirm the gift card was processed, then mark complete.', textAlign: TextAlign.center,
@@ -1030,11 +1079,12 @@ class _GiftCardFlow extends StatelessWidget {
 // === PAX (card) FLOW ===
 class _PaxFlow extends StatefulWidget {
   final Order order;
+  final double? due; // D4: phần còn phải thu (sau gift)
   final String mode, host, serial;
   final int port;
   final VoidCallback onBack;
   final ValueChanged<Map<String, dynamic>> onDone;
-  const _PaxFlow({required this.order, required this.mode, required this.host, required this.port, required this.serial, required this.onBack, required this.onDone});
+  const _PaxFlow({required this.order, this.due, required this.mode, required this.host, required this.port, required this.serial, required this.onBack, required this.onDone});
   @override
   State<_PaxFlow> createState() => _PaxFlowState();
 }
@@ -1053,7 +1103,7 @@ class _PaxFlowState extends State<_PaxFlow> {
   Future<void> _run() async {
     setState(() { _busy = true; _result = null; _error = null; });
     try {
-      final r = await Pax.sale(amount: widget.order.totals.total, connectionMode: widget.mode,
+      final r = await Pax.sale(amount: widget.due ?? widget.order.totals.total, connectionMode: widget.mode,
           host: widget.host.isEmpty ? null : widget.host, port: widget.port, terminalSerial: widget.serial,
           refNum: 'BB${widget.order.number}');
       if (!mounted) return;

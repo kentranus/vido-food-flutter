@@ -70,6 +70,16 @@ class Order {
     this.discount = 0, this.discountType = 'amount', this.note = '', required this.createdAt, this.status = 'open'})
       : items = items ?? [];
 
+  // ---- Gift card tender áp vào đơn (POS D4) ----
+  // giftCode FULL chỉ giữ trong RAM để refund khi remove/fail — không in/log.
+  String? giftCode;
+  String? giftCodeMasked;
+  double giftApplied = 0;
+  double giftRemaining = 0; // balance thẻ còn lại sau redeem
+  String? giftRef;          // idempotency key (redeem + refund cùng ref)
+  double get due => (totals.total - giftApplied).clamp(0, double.infinity).toDouble();
+  void clearGift() { giftCode = null; giftCodeMasked = null; giftApplied = 0; giftRemaining = 0; giftRef = null; }
+
   ({double sub, double discount, double taxable, double tax, double total}) get totals {
     final sub = items.fold(0.0, (s, l) => s + l.lineTotal);
     var disc = 0.0;

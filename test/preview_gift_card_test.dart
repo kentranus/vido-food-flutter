@@ -135,21 +135,38 @@ void main() {
     await _snap(tester, 'giftcard_8_applied');
   });
 
-  testWidgets('D3 balance < due → partial coming soon, Apply disabled', (tester) async {
-    var redeemCalled = false;
+  testWidgets('D4 balance < due → PARTIAL apply: redeem đúng = balance, hiện remaining due', (tester) async {
+    double? redeemedAmount;
     await tester.pumpWidget(_host(GiftCardCheckPanel(
         due: 40.0, redeemRef: 'POS-2-test',
         check: (code) async => {'status': 200, 'ok': true, 'code': code, 'balance': 25.0, 'initial': 25.0},
-        redeem: (c, a, r) async { redeemCalled = true; return {'ok': true}; })));
+        redeem: (c, a, r) async { redeemedAmount = a; return {'ok': true, 'applied': a, 'remaining': 0.0}; })));
     await _enterAndCheck(tester, 'VG-VGMZ-9HDB');
-    expect(find.text('Partial gift card payment is coming soon.'), findsOneWidget);
-    final applyBtn = find.text('Apply Gift Card');
+    final applyBtn = find.text('Apply Gift Card · \$25.00'); // min(balance 25, due 40) = 25
     expect(applyBtn, findsOneWidget);
-    await tester.tap(applyBtn); // disabled — không được gọi redeem
+    await _snap(tester, 'giftcard_9_partial_enabled');
+    await tester.tap(applyBtn);
+    for (var i = 0; i < 10; i++) { await tester.pump(const Duration(milliseconds: 100)); }
+    expect(redeemedAmount, 25.0); // không hơn balance
+    expect(find.text('GIFT CARD APPLIED'), findsOneWidget);
+    expect(find.text('-\$25.00'), findsOneWidget);
+    expect(find.text('\$15.00'), findsOneWidget); // remaining due = 40 − 25
+    expect(find.text('Collect the remaining due by cash or card.'), findsOneWidget);
+    await _snap(tester, 'giftcard_10_partial_applied');
+  });
+
+  testWidgets('D4 GiftAppliedLine — dòng gift trên màn payment + Remove gọi refund', (tester) async {
+    var removed = false;
+    await tester.pumpWidget(_host(GiftAppliedLine(
+        maskedCode: 'VG-****-H4B3', applied: 25.0, due: 15.0, onRemove: () => removed = true)));
     await tester.pump(const Duration(milliseconds: 200));
-    expect(redeemCalled, isFalse);
-    expect(find.text('GIFT CARD APPLIED'), findsNothing);
-    await _snap(tester, 'giftcard_9_partial_soon');
+    expect(find.text('Gift Card VG-****-H4B3'), findsOneWidget);
+    expect(find.text('-\$25.00'), findsOneWidget);
+    expect(find.text('Remaining due'), findsOneWidget);
+    expect(find.text('\$15.00'), findsOneWidget);
+    await _snap(tester, 'giftcard_11_payment_line');
+    await tester.tap(find.text('Remove gift card'));
+    expect(removed, isTrue);
   });
 
   testWidgets('D3 zero-balance / invalid không apply được; redeem lỗi giữ nguyên đơn', (tester) async {

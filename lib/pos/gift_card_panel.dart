@@ -4,12 +4,11 @@ import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 import 'order_models.dart' show money;
 
-/// Gift Card panel — Phase D2 (check balance) + D3 (apply FULL-COVER only).
+/// Gift Card panel — D2 (check) + D3 (full-cover) + D4 (PARTIAL).
 ///
-/// D3 rules: Apply chỉ bật khi balance >= due (đơn được trả TRỌN bằng thẻ).
-/// balance < due → "Partial gift card payment is coming soon." (D4 sẽ làm).
-/// Redeem đúng `due` (không hơn balance, không hơn đơn) — backend cũng clamp +
-/// idempotent theo `redeemRef`, nên retry không trừ đúp.
+/// D4: Apply bật khi thẻ còn tiền và đơn còn due. Số tiền redeem luôn =
+/// min(balance, due) — không vượt thẻ, không vượt đơn, không bao giờ âm.
+/// Backend clamp thêm lần nữa + idempotent theo `redeemRef` (retry không trừ đúp).
 ///
 /// Mọi network call được inject để widget test chạy offline:
 ///   check  → POST /api/gift-cards/check   {code}
@@ -55,11 +54,16 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
     setState(() { _busy = false; _result = r; });
   }
 
+  double get _applyAmount { // min(balance, due) — luật D4
+    final balance = (_result?['balance'] as num?)?.toDouble() ?? 0;
+    final due = widget.due ?? 0;
+    return balance < due ? balance : due;
+  }
+
   bool get _canApply {
     final r = _result;
     if (r == null || r['ok'] != true || widget.redeem == null || widget.due == null) return false;
-    final balance = (r['balance'] as num?)?.toDouble() ?? 0;
-    return balance > 0 && balance >= widget.due!;
+    return _applyAmount > 0;
   }
 
   Future<void> _apply() async {
@@ -68,12 +72,12 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
     final code = r['code']?.toString() ?? _code.text.trim().toUpperCase();
     setState(() { _busy = true; _applyError = null; });
     final ref = widget.redeemRef ?? 'POS-${DateTime.now().millisecondsSinceEpoch}';
-    final res = await widget.redeem!(code, widget.due!, ref);
+    final res = await widget.redeem!(code, _applyAmount, ref);
     if (!mounted) return;
     if (res['ok'] == true) {
       final applied = {
         'code': code,
-        'applied': (res['applied'] as num?)?.toDouble() ?? widget.due!,
+        'applied': (res['applied'] as num?)?.toDouble() ?? _applyAmount,
         'remaining': (res['remaining'] as num?)?.toDouble() ?? 0.0,
         'ref': ref,
       };
@@ -93,10 +97,7 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
   Widget build(BuildContext context) {
     final c = PT.c;
     final applied = _applied;
-    if (applied != null) return _AppliedCard(applied: applied);
-    final balance = (_result?['balance'] as num?)?.toDouble();
-    final checkedOk = _result?['ok'] == true;
-    final partialOnly = checkedOk && widget.due != null && (balance ?? 0) > 0 && (balance ?? 0) < widget.due!;
+    if (applied != null) return _AppliedCard(applied: applied, due: widget.due ?? 0);
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       PField(label: 'Gift Card Code', child: PInput(
         controller: _code,
@@ -115,11 +116,6 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
         padding: const EdgeInsets.only(top: 14),
         child: _ResultCard(result: _result!),
       ),
-      if (partialOnly) Padding(
-        padding: const EdgeInsets.only(top: 10),
-        child: Text('Partial gift card payment is coming soon.', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c.textMute)),
-      ),
       if (_applyError != null) Padding(
         padding: const EdgeInsets.only(top: 10),
         child: Text(_applyError!, textAlign: TextAlign.center,
@@ -127,7 +123,7 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
       ),
       const SizedBox(height: 12),
       PButton(
-        Text(widget.due != null && _canApply ? 'Apply Gift Card · ${money(widget.due!)}' : 'Apply Gift Card'),
+        Text(_canApply ? 'Apply Gift Card · ${money(_applyAmount)}' : 'Apply Gift Card'),
         expand: true,
         variant: _canApply ? PBtnVariant.primary : PBtnVariant.secondary,
         onPressed: _canApply && !_busy ? _apply : null,
@@ -138,12 +134,14 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
 
 class _AppliedCard extends StatelessWidget {
   final Map<String, dynamic> applied;
-  const _AppliedCard({required this.applied});
+  final double due; // tổng đơn lúc apply — để hiện remaining due
+  const _AppliedCard({required this.applied, required this.due});
   @override
   Widget build(BuildContext context) {
     final c = PT.c;
     final amt = (applied['applied'] as num).toDouble();
     final remaining = (applied['remaining'] as num).toDouble();
+    final dueLeft = (due - amt).clamp(0, double.infinity).toDouble();
     Widget row(String l, String v, {Color? color, double size = 14}) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -162,8 +160,49 @@ class _AppliedCard extends StatelessWidget {
         ]),
         const SizedBox(height: 10),
         row('Gift Card ${maskGiftCode(applied['code'].toString())}', '-${money(amt)}', color: c.primary, size: 18),
-        row('Remaining due', money(0)),
+        row('Remaining due', money(dueLeft), color: dueLeft > 0 ? c.red : null, size: dueLeft > 0 ? 18 : 14),
         row('Remaining gift card balance', money(remaining)),
+        if (dueLeft > 0) Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('Collect the remaining due by cash or card.', textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: c.textMute)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Dòng "Gift Card applied" hiển thị trên màn chọn phương thức thanh toán
+/// (public để test render được). [onRemove] = hoàn redeem + gỡ thẻ khỏi đơn.
+class GiftAppliedLine extends StatelessWidget {
+  final String maskedCode;
+  final double applied;
+  final double due;
+  final VoidCallback? onRemove;
+  final bool removing;
+  const GiftAppliedLine({super.key, required this.maskedCode, required this.applied, required this.due, this.onRemove, this.removing = false});
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: c.primaryA, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('Gift Card $maskedCode', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c.text)),
+          Text('-${money(applied)}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: c.primary)),
+        ]),
+        const SizedBox(height: 4),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('Remaining due', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMute)),
+          Text(money(due), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: due > 0 ? c.red : c.primary)),
+        ]),
+        Align(alignment: Alignment.centerRight, child: TextButton(
+          onPressed: removing ? null : onRemove,
+          child: Text(removing ? 'Removing…' : 'Remove gift card',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: c.red)),
+        )),
       ]),
     );
   }
