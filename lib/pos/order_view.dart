@@ -8,6 +8,7 @@ import '../services/staff_store.dart';
 import '../screens/pin_lock.dart';
 import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
+import 'gift_card_panel.dart';
 import 'default_menu.dart';
 import 'order_models.dart';
 
@@ -985,6 +986,9 @@ class _GiftCardFlow extends StatelessWidget {
       Padding(padding: const EdgeInsets.only(top: 10),
           child: Text('Gift Card', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
       _payTotalBox(c, 'Amount', order.totals.total),
+      const SizedBox(height: 14),
+      // D2: nhập mã + Check Balance (chỉ xem — apply là Phase D3).
+      GiftCardCheckPanel(check: (code) => Api.instance.giftCheck(code)),
       const SizedBox(height: 14),
       Text('Confirm the gift card was processed, then mark complete.', textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700)),

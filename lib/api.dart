@@ -254,6 +254,9 @@ class Api {
   Future<Map<String, dynamic>> createOrder(Map<String, dynamic> order) => _post('/api/orders', order);
   Future<Map<String, dynamic>> saveMenu(Map<String, dynamic> menu) => _post('/api/menu', menu);
 
+  // ---- Gift cards (Phase D2: check balance only; redeem/refund come in D3) ----
+  Future<Map<String, dynamic>> giftCheck(String code) => _post('/api/gift-cards/check', {'code': code});
+
   // ---- Reports + history ----
   Future<Map<String, dynamic>> getReports() => _get('/api/reports/summary');
   Future<Map<String, dynamic>> getOrders() => _get('/api/orders');
