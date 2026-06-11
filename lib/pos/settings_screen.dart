@@ -703,6 +703,9 @@ class _OrderingTabState extends State<_OrderingTab> {
       Text('Controls your customer order page (order.vidofood.com). Hours decide Open/Closed and which Schedule times customers can pick.',
           style: TextStyle(color: c.textMute, fontWeight: FontWeight.w600, fontSize: 13, height: 1.5)),
 
+      _section(c, 'Order confirmation'),
+      const AutoConfirmTile(),
+
       _section(c, 'Availability'),
       _toggle(c, 'Accept Pickup orders', _pickup, (v) => setState(() => _pickup = v)),
       _toggle(c, 'Allow Schedule for later', _schedule, (v) => setState(() => _schedule = v)),
@@ -779,6 +782,81 @@ class _OrderingTabState extends State<_OrderingTab> {
     final h = int.tryParse(p[0]) ?? 0; final m = p[1];
     final ap = h < 12 ? 'AM' : 'PM'; final h12 = h % 12 == 0 ? 12 : h % 12;
     return '$h12:$m $ap';
+  }
+}
+
+// ============================================== Auto Confirm (OM4, server-side)
+/// Switch "Auto Confirm online orders" — saves to the SERVER per store (shared
+/// with the Order Manager app), takes effect immediately (no Save button).
+/// ON: server accepts + charges the card the moment the order arrives — the POS
+/// still tings on every new order, staff just never tap Confirm. OFF: each
+/// online order rings until staff Accept (charges) or Reject (voids).
+/// Loader/saver are injectable so widget tests run without a network.
+class AutoConfirmTile extends StatefulWidget {
+  final Future<bool> Function()? load;
+  final Future<Map<String, dynamic>> Function(bool on)? save;
+  const AutoConfirmTile({super.key, this.load, this.save});
+  @override
+  State<AutoConfirmTile> createState() => _AutoConfirmTileState();
+}
+
+class _AutoConfirmTileState extends State<AutoConfirmTile> {
+  bool? _on; // null = loading
+  bool _busy = false;
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  static Future<bool> _defaultLoad() async {
+    final j = await Api.instance.getSettings();
+    final st = (j['store'] is Map) ? Map<String, dynamic>.from(j['store']) : <String, dynamic>{};
+    return st['requireOnlineOrderAccept'] == false; // autoConfirm = !requireAccept
+  }
+
+  Future<void> _load() async {
+    try {
+      final v = await (widget.load ?? _defaultLoad)();
+      if (mounted) setState(() => _on = v);
+    } catch (_) {
+      if (mounted) setState(() => _on = false);
+    }
+  }
+
+  Future<void> _set(bool on) async {
+    final prev = _on;
+    setState(() { _on = on; _busy = true; });
+    final r = await (widget.save ?? Api.instance.setAutoConfirmOnline)(on);
+    if (!mounted) return;
+    if (r['ok'] == true) {
+      setState(() => _busy = false);
+      _toast(context, true, on ? 'Auto Confirm ON — new online orders are accepted and charged automatically.'
+                               : 'Auto Confirm OFF — staff must Accept each online order.');
+    } else {
+      setState(() { _on = prev; _busy = false; });
+      _toast(context, false, (r['error'] ?? 'Could not save — check the connection.').toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text('Auto Confirm online orders', style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13))),
+          if (_on == null)
+            const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+          else
+            Switch(value: _on!, activeThumbColor: c.primary, onChanged: _busy ? null : _set),
+        ]),
+        Padding(padding: const EdgeInsets.only(top: 4), child: Text(
+          'ON: new orders are confirmed and the card is charged automatically — you still hear an alert for every order, no Confirm tap needed. '
+          'OFF: each order rings until staff Accept or Reject. Applies to ONLINE orders only (kiosk orders are always paid + auto-confirmed). Shared with the Order Manager app.',
+          style: TextStyle(color: c.textMute, fontWeight: FontWeight.w600, fontSize: 12, height: 1.5))),
+      ]),
+    );
   }
 }
 

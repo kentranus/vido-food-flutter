@@ -32,6 +32,12 @@ String? columnOf(String status, String source) {
   return null;
 }
 
+/// OM4 — server-side Auto Confirm: an ONLINE order that shows up ALREADY
+/// accepted (server captured the card at order time). Staff still get a light
+/// ting so they know to start cooking — there's just nothing to confirm.
+bool isServerConfirmedOnline(String status, String source, {required bool seen}) =>
+    !seen && status == 'accepted' && !source.toLowerCase().contains('kiosk');
+
 String minsAgo(String iso) {
   final d = DateTime.tryParse(iso);
   if (d == null) return '';
@@ -156,6 +162,24 @@ class OnlineOrdersController extends ChangeNotifier {
           && (o.status == 'new' || o.status == 'pending_accept') && !_autoAccepted.contains(o.id)) {
         _autoAccepted.add(o.id);
         Api.instance.accept(o.id, null);
+      }
+    }
+    // OM4 — server-side Auto Confirm: online orders can arrive ALREADY accepted
+    // (store toggle in Settings → Online Ordering; card was captured at order
+    // time). Light ting — no takeover, nothing to confirm. Prints reuse the
+    // existing online auto-print toggles; markPrinted clears the server flag so
+    // other devices (Order Manager app) don't double-print.
+    for (final o in activeOrders) {
+      if (isServerConfirmedOnline(o.status, o.source, seen: _seen.contains(o.id))) {
+        _seen.add(o.id);
+        if (_first) continue;
+        _ting.play(AssetSource('sounds/order_alert.wav'));
+        if (o.shouldPrint) {
+          var printedAny = false;
+          if (_flag('onlineKitchen') && !_kioskPrinted.contains(o.id)) { _kioskPrinted.add(o.id); _printTicket(o); printedAny = true; }
+          if (_flag('onlineReceipt') && !_receiptPrinted.contains(o.id)) { _receiptPrinted.add(o.id); _printCustomerReceipt(o); printedAny = true; }
+          if (printedAny) Api.instance.markPrinted(o.id);
+        }
       }
     }
     _first = false;

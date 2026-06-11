@@ -53,6 +53,7 @@ class OnlineOrder {
   final int? etaMinutes;
   final String paymentStatus;
   final String createdAt;
+  final bool shouldPrint; // server flag: confirmed but not yet printed anywhere
   OnlineOrder({
     required this.id,
     this.number,
@@ -69,6 +70,7 @@ class OnlineOrder {
     this.etaMinutes,
     required this.paymentStatus,
     required this.createdAt,
+    this.shouldPrint = false,
   });
   static double _d(dynamic v) => v == null ? 0 : (v is num ? v.toDouble() : double.tryParse('$v') ?? 0);
   factory OnlineOrder.fromJson(Map<String, dynamic> j) => OnlineOrder(
@@ -87,6 +89,7 @@ class OnlineOrder {
         etaMinutes: j['etaMinutes'] == null ? null : int.tryParse('${j['etaMinutes']}'),
         paymentStatus: (j['paymentStatus'] ?? '').toString(),
         createdAt: (j['createdAt'] ?? '').toString(),
+        shouldPrint: j['shouldPrint'] == true,
       );
   bool get isCard => paymentStatus == 'authorized' || paymentStatus == 'captured' || paymentStatus == 'card';
 }
@@ -271,6 +274,9 @@ class Api {
 
   // ---- Settings (shop info / payment / customer display / kiosks) ----
   Future<Map<String, dynamic>> saveSettings(Map<String, dynamic> patch) => _post('/api/settings', patch);
+  // OM4 — server-side Auto Confirm online orders (maps to requireOnlineOrderAccept).
+  Future<Map<String, dynamic>> setAutoConfirmOnline(bool on) =>
+      _post('/api/store/online-orders', {'autoConfirm': on});
 
   // ---- Staff & PINs ----
   Future<Map<String, dynamic>> getStaff() => _get('/api/staff');
