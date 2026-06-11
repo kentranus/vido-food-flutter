@@ -254,8 +254,12 @@ class Api {
   Future<Map<String, dynamic>> createOrder(Map<String, dynamic> order) => _post('/api/orders', order);
   Future<Map<String, dynamic>> saveMenu(Map<String, dynamic> menu) => _post('/api/menu', menu);
 
-  // ---- Gift cards (Phase D2: check balance only; redeem/refund come in D3) ----
+  // ---- Gift cards (D2 check · D3 redeem/refund — backend idempotent theo orderId) ----
   Future<Map<String, dynamic>> giftCheck(String code) => _post('/api/gift-cards/check', {'code': code});
+  Future<Map<String, dynamic>> giftRedeem(String code, double amount, String orderId) =>
+      _post('/api/gift-cards/redeem', {'code': code, 'amount': amount, 'orderId': orderId});
+  Future<Map<String, dynamic>> giftRefund(String code, String orderId) =>
+      _post('/api/gift-cards/refund', {'code': code, 'orderId': orderId});
 
   // ---- Reports + history ----
   Future<Map<String, dynamic>> getReports() => _get('/api/reports/summary');

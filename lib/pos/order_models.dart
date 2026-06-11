@@ -127,7 +127,10 @@ LinearGradient gradientFor(String seed) {
 }
 
 // Lightweight JSON for persisting a completed order to /api/orders later.
-Map<String, dynamic> orderToApi(Order o, {String? paymentMethod, double tip = 0}) => {
+// giftCode (MASKED) + giftApplied: chỉ để history/reports — không gửi full code.
+Map<String, dynamic> orderToApi(Order o, {String? paymentMethod, double tip = 0, String? giftCode, double? giftApplied}) => {
+      if (giftCode != null && giftCode.isNotEmpty) 'giftCode': giftCode,
+      if (giftApplied != null && giftApplied > 0) 'giftApplied': giftApplied,
       'number': o.number,
       'type': o.type,
       'orderType': o.type.toUpperCase(),

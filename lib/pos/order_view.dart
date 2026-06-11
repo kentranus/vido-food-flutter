@@ -160,8 +160,24 @@ class _OrderViewState extends State<OrderView> {
     // Cash with change → pop the drawer.
     if (pay['method'] == 'cash' && ((pay['changeGiven'] ?? 0.0) as double) > 0) _kickDrawer();
     CustomerDisplay.update({'state': 'done', 'total': o.totals.total + tip, 'shop': {'name': Api.instance.storeName}});
-    // Persist the completed order to the cloud (best-effort), print kitchen ticket.
-    Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
+    // Persist the completed order to the cloud, print kitchen ticket.
+    // Gift-card REDEEM (tiền thật đã trừ trên thẻ) → PHẢI await; nếu lưu đơn
+    // thất bại thì hoàn lại thẻ (refund idempotent theo giftRef) và giữ đơn mở.
+    if (pay['method'] == 'giftcard' && pay['giftApplied'] != null) {
+      final saved = await Api.instance.createOrder(orderToApi(o,
+          paymentMethod: 'giftcard', tip: tip,
+          giftCode: pay['giftCode']?.toString(), giftApplied: (pay['giftApplied'] as num).toDouble()));
+      if (saved['ok'] != true) {
+        await Api.instance.giftRefund(pay['giftCodeFull'].toString(), pay['giftRef'].toString());
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not save the order — the gift card was NOT charged. Please try again.')));
+        _pushDisplay(o);
+        return; // đơn vẫn mở, không in bill, không xoá khỏi danh sách
+      }
+    } else {
+      Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
+    }
     try {
       await printKitchenTicket(
         source: 'POS', number: '${o.number}', type: orderTypeOf(o.type).label,
@@ -987,8 +1003,21 @@ class _GiftCardFlow extends StatelessWidget {
           child: Text('Gift Card', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
       _payTotalBox(c, 'Amount', order.totals.total),
       const SizedBox(height: 14),
-      // D2: nhập mã + Check Balance (chỉ xem — apply là Phase D3).
-      GiftCardCheckPanel(check: (code) => Api.instance.giftCheck(code)),
+      // D3: check + APPLY full-cover (balance >= total). Redeem đúng số tiền đơn;
+      // idempotency/refund key theo đơn → retry không trừ đúp, fail hoàn được.
+      GiftCardCheckPanel(
+        check: (code) => Api.instance.giftCheck(code),
+        redeem: (code, amount, ref) => Api.instance.giftRedeem(code, amount, ref),
+        due: order.totals.total,
+        redeemRef: 'POS-${order.number}-${order.id}',
+        onApplied: (a) => onDone({
+          'method': 'giftcard', 'tip': 0.0,
+          'giftApplied': a['applied'], 'giftRemaining': a['remaining'],
+          'giftCode': maskGiftCode(a['code'].toString()),
+          'giftCodeFull': a['code'], // chỉ dùng nội bộ cho refund-on-fail; không in/không log
+          'giftRef': a['ref'],
+        }),
+      ),
       const SizedBox(height: 14),
       Text('Confirm the gift card was processed, then mark complete.', textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700)),

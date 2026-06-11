@@ -4,17 +4,23 @@ import '../ui/pos_theme.dart';
 import '../ui/pos_widgets.dart';
 import 'order_models.dart' show money;
 
-/// Phase D2 — Gift Card: manual code entry + Check Balance ONLY.
-/// No redeem/apply here (that is Phase D3+). The panel is public and takes the
-/// API call as a callback so widget tests can drive every state offline.
+/// Gift Card panel — Phase D2 (check balance) + D3 (apply FULL-COVER only).
 ///
-/// `check` resolves to the backend response map of POST /api/gift-cards/check:
-///   ok:true  → {ok:true, code, balance, initial}
-///   not found→ {status:404, ok:false, error}
-///   offline  → {status:0, ok:false, offline:true}
+/// D3 rules: Apply chỉ bật khi balance >= due (đơn được trả TRỌN bằng thẻ).
+/// balance < due → "Partial gift card payment is coming soon." (D4 sẽ làm).
+/// Redeem đúng `due` (không hơn balance, không hơn đơn) — backend cũng clamp +
+/// idempotent theo `redeemRef`, nên retry không trừ đúp.
+///
+/// Mọi network call được inject để widget test chạy offline:
+///   check  → POST /api/gift-cards/check   {code}
+///   redeem → POST /api/gift-cards/redeem  {code, amount, orderId: redeemRef}
 class GiftCardCheckPanel extends StatefulWidget {
   final Future<Map<String, dynamic>> Function(String code) check;
-  const GiftCardCheckPanel({super.key, required this.check});
+  final Future<Map<String, dynamic>> Function(String code, double amount, String ref)? redeem;
+  final double? due;        // tổng đơn cần trả; null = chế độ chỉ-xem (D2)
+  final String? redeemRef;  // id ổn định theo đơn (idempotency + refund)
+  final ValueChanged<Map<String, dynamic>>? onApplied; // {code, applied, remaining}
+  const GiftCardCheckPanel({super.key, required this.check, this.redeem, this.due, this.redeemRef, this.onApplied});
 
   @override
   State<GiftCardCheckPanel> createState() => _GiftCardCheckPanelState();
@@ -30,7 +36,9 @@ String maskGiftCode(String code) {
 class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
   final _code = TextEditingController();
   bool _busy = false;
-  Map<String, dynamic>? _result; // last check response (null = chưa check)
+  Map<String, dynamic>? _result;  // kết quả check gần nhất
+  Map<String, dynamic>? _applied; // kết quả redeem thành công {code, applied, remaining}
+  String? _applyError;
 
   @override
   void dispose() {
@@ -41,14 +49,54 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
   Future<void> _check() async {
     final code = _code.text.trim().toUpperCase();
     if (code.isEmpty || _busy) return;
-    setState(() { _busy = true; _result = null; });
+    setState(() { _busy = true; _result = null; _applyError = null; });
     final r = await widget.check(code);
     if (!mounted) return;
     setState(() { _busy = false; _result = r; });
   }
 
+  bool get _canApply {
+    final r = _result;
+    if (r == null || r['ok'] != true || widget.redeem == null || widget.due == null) return false;
+    final balance = (r['balance'] as num?)?.toDouble() ?? 0;
+    return balance > 0 && balance >= widget.due!;
+  }
+
+  Future<void> _apply() async {
+    final r = _result;
+    if (!_canApply || _busy || r == null) return;
+    final code = r['code']?.toString() ?? _code.text.trim().toUpperCase();
+    setState(() { _busy = true; _applyError = null; });
+    final ref = widget.redeemRef ?? 'POS-${DateTime.now().millisecondsSinceEpoch}';
+    final res = await widget.redeem!(code, widget.due!, ref);
+    if (!mounted) return;
+    if (res['ok'] == true) {
+      final applied = {
+        'code': code,
+        'applied': (res['applied'] as num?)?.toDouble() ?? widget.due!,
+        'remaining': (res['remaining'] as num?)?.toDouble() ?? 0.0,
+        'ref': ref,
+      };
+      setState(() { _busy = false; _applied = applied; });
+      widget.onApplied?.call(applied);
+    } else {
+      setState(() {
+        _busy = false;
+        _applyError = res['offline'] == true
+            ? 'Gift Card requires internet connection.'
+            : 'Could not apply the gift card. The card was not charged — please try again.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final c = PT.c;
+    final applied = _applied;
+    if (applied != null) return _AppliedCard(applied: applied);
+    final balance = (_result?['balance'] as num?)?.toDouble();
+    final checkedOk = _result?['ok'] == true;
+    final partialOnly = checkedOk && widget.due != null && (balance ?? 0) > 0 && (balance ?? 0) < widget.due!;
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       PField(label: 'Gift Card Code', child: PInput(
         controller: _code,
@@ -67,10 +115,57 @@ class _GiftCardCheckPanelState extends State<GiftCardCheckPanel> {
         padding: const EdgeInsets.only(top: 14),
         child: _ResultCard(result: _result!),
       ),
+      if (partialOnly) Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Text('Partial gift card payment is coming soon.', textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c.textMute)),
+      ),
+      if (_applyError != null) Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Text(_applyError!, textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: c.red)),
+      ),
       const SizedBox(height: 12),
-      // Placeholder cho Phase D3 — chưa apply được.
-      PButton(const Text('Apply — coming next'), expand: true, variant: PBtnVariant.secondary, onPressed: null),
+      PButton(
+        Text(widget.due != null && _canApply ? 'Apply Gift Card · ${money(widget.due!)}' : 'Apply Gift Card'),
+        expand: true,
+        variant: _canApply ? PBtnVariant.primary : PBtnVariant.secondary,
+        onPressed: _canApply && !_busy ? _apply : null,
+      ),
     ]);
+  }
+}
+
+class _AppliedCard extends StatelessWidget {
+  final Map<String, dynamic> applied;
+  const _AppliedCard({required this.applied});
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    final amt = (applied['applied'] as num).toDouble();
+    final remaining = (applied['remaining'] as num).toDouble();
+    Widget row(String l, String v, {Color? color, double size = 14}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(l, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMute)),
+        Text(v, style: TextStyle(fontSize: size, fontWeight: FontWeight.w900, color: color ?? c.text)),
+      ]),
+    );
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: c.primaryA, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Icon(Icons.check_circle, color: c.primary, size: 20),
+          const SizedBox(width: 8),
+          Text('GIFT CARD APPLIED', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: c.primary)),
+        ]),
+        const SizedBox(height: 10),
+        row('Gift Card ${maskGiftCode(applied['code'].toString())}', '-${money(amt)}', color: c.primary, size: 18),
+        row('Remaining due', money(0)),
+        row('Remaining gift card balance', money(remaining)),
+      ]),
+    );
   }
 }
 

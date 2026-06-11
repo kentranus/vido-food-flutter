@@ -75,7 +75,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('GIFT CARD CODE'), findsOneWidget);
     expect(find.text('Check Balance'), findsOneWidget);
-    expect(find.text('Apply — coming next'), findsOneWidget);
+    expect(find.text('Apply Gift Card'), findsOneWidget); // disabled cho tới khi balance đủ
     await _snap(tester, 'giftcard_1_initial');
   });
 
@@ -112,6 +112,66 @@ void main() {
     await _enterAndCheck(tester, 'VG-8RWN-H4B3');
     expect(find.text('GIFT CARD REQUIRES INTERNET CONNECTION'), findsOneWidget);
     await _snap(tester, 'giftcard_5_offline');
+  });
+
+  // ===== Phase D3: apply full-cover =====
+  testWidgets('D3 balance >= due → Apply enabled (primary, kèm số tiền)', (tester) async {
+    await tester.pumpWidget(_host(GiftCardCheckPanel(
+        due: 20.0, redeemRef: 'POS-1-test',
+        check: (code) async => {'status': 200, 'ok': true, 'code': code, 'balance': 50.0, 'initial': 50.0},
+        redeem: (c, a, r) async => {'ok': true, 'applied': a, 'remaining': 30.0})));
+    await _enterAndCheck(tester, 'VG-8RWN-H4B3');
+    final btn = find.text('Apply Gift Card · \$20.00');
+    expect(btn, findsOneWidget);
+    await _snap(tester, 'giftcard_7_apply_enabled');
+    // tap apply → applied card with remaining due $0
+    await tester.tap(btn);
+    for (var i = 0; i < 10; i++) { await tester.pump(const Duration(milliseconds: 100)); }
+    expect(find.text('GIFT CARD APPLIED'), findsOneWidget);
+    expect(find.text('-\$20.00'), findsOneWidget);
+    expect(find.text('Remaining due'), findsOneWidget);
+    expect(find.text('\$0.00'), findsOneWidget);
+    expect(find.text('\$30.00'), findsOneWidget); // remaining gift balance
+    await _snap(tester, 'giftcard_8_applied');
+  });
+
+  testWidgets('D3 balance < due → partial coming soon, Apply disabled', (tester) async {
+    var redeemCalled = false;
+    await tester.pumpWidget(_host(GiftCardCheckPanel(
+        due: 40.0, redeemRef: 'POS-2-test',
+        check: (code) async => {'status': 200, 'ok': true, 'code': code, 'balance': 25.0, 'initial': 25.0},
+        redeem: (c, a, r) async { redeemCalled = true; return {'ok': true}; })));
+    await _enterAndCheck(tester, 'VG-VGMZ-9HDB');
+    expect(find.text('Partial gift card payment is coming soon.'), findsOneWidget);
+    final applyBtn = find.text('Apply Gift Card');
+    expect(applyBtn, findsOneWidget);
+    await tester.tap(applyBtn); // disabled — không được gọi redeem
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(redeemCalled, isFalse);
+    expect(find.text('GIFT CARD APPLIED'), findsNothing);
+    await _snap(tester, 'giftcard_9_partial_soon');
+  });
+
+  testWidgets('D3 zero-balance / invalid không apply được; redeem lỗi giữ nguyên đơn', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(_host(GiftCardCheckPanel(
+        due: 10.0, redeemRef: 'POS-3-test',
+        check: (code) async => {'status': 200, 'ok': true, 'code': code, 'balance': 0.0, 'initial': 25.0},
+        redeem: (c, a, r) async { calls++; return {'ok': true}; })));
+    await _enterAndCheck(tester, 'VG-A9BA-DBHD');
+    await tester.tap(find.text('Apply Gift Card'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(calls, 0); // thẻ $0 → Apply disabled
+    // redeem failure path → thông báo, không applied
+    await tester.pumpWidget(_host(GiftCardCheckPanel(
+        due: 10.0, redeemRef: 'POS-4-test',
+        check: (code) async => {'status': 200, 'ok': true, 'code': code, 'balance': 50.0, 'initial': 50.0},
+        redeem: (c, a, r) async => {'status': 500, 'ok': false, 'error': 'boom'})));
+    await _enterAndCheck(tester, 'VG-8RWN-H4B3');
+    await tester.tap(find.text('Apply Gift Card · \$10.00'));
+    for (var i = 0; i < 8; i++) { await tester.pump(const Duration(milliseconds: 100)); }
+    expect(find.textContaining('Could not apply the gift card'), findsOneWidget);
+    expect(find.text('GIFT CARD APPLIED'), findsNothing);
   });
 
   testWidgets('server error (5xx) — generic retry message', (tester) async {
