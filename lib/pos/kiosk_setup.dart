@@ -30,7 +30,9 @@ Map<String, dynamic> _asMap(dynamic v) => v is Map ? Map<String, dynamic>.from(v
 bool kioskAutoFlag(Map<String, dynamic> auto, String key) {
   final v = auto[key];
   if (v is bool) return v;
-  return key == 'kioskKitchen';
+  // Defaults that preserve the original hardcoded behavior:
+  // kiosk kitchen ticket always printed; Accept always printed a ticket.
+  return key == 'kioskKitchen' || key == 'acceptPrint';
 }
 
 class KioskSetupPanel extends StatefulWidget {
@@ -53,6 +55,7 @@ class _KioskSetupPanelState extends State<KioskSetupPanel> {
   // auto-handling (kiosk / online)
   bool _kioskAccept = false, _kioskKitchen = true, _kioskReceipt = false;
   bool _onlineAccept = false, _onlineKitchen = false, _onlineReceipt = false;
+  bool _acceptPrint = true;
 
   // kiosk PAX
   bool _paxEnabled = false;
@@ -84,6 +87,7 @@ class _KioskSetupPanelState extends State<KioskSetupPanel> {
       _onlineAccept = kioskAutoFlag(auto, 'onlineAccept');
       _onlineKitchen = kioskAutoFlag(auto, 'onlineKitchen');
       _onlineReceipt = kioskAutoFlag(auto, 'onlineReceipt');
+      _acceptPrint = kioskAutoFlag(auto, 'acceptPrint');
       _paxEnabled = pax['enabled'] == true;
       _paxMode = (pax['connectionMode'] ?? 'tcp').toString();
       _paxIp.text = '${pax['ip'] ?? ''}';
@@ -106,6 +110,7 @@ class _KioskSetupPanelState extends State<KioskSetupPanel> {
       'auto': {
         'kioskAccept': _kioskAccept, 'kioskKitchen': _kioskKitchen, 'kioskReceipt': _kioskReceipt,
         'onlineAccept': _onlineAccept, 'onlineKitchen': _onlineKitchen, 'onlineReceipt': _onlineReceipt,
+        'acceptPrint': _acceptPrint,
       },
       'kioskPax': {
         'enabled': _paxEnabled, 'connectionMode': _paxMode, 'ip': _paxIp.text.trim(),
@@ -159,6 +164,7 @@ class _KioskSetupPanelState extends State<KioskSetupPanel> {
       _tg(c, 'Auto print customer receipt', _kioskReceipt, (v) => setState(() => _kioskReceipt = v)),
 
       _sect(c, 'Auto-handling — Online orders'),
+      _tg(c, 'Print kitchen ticket when you tap Accept', _acceptPrint, (v) => setState(() => _acceptPrint = v)),
       _tg(c, 'Auto accept new online orders (skips the takeover popup)', _onlineAccept, (v) => setState(() => _onlineAccept = v)),
       _tg(c, 'Auto print kitchen ticket (when auto-accepted)', _onlineKitchen, (v) => setState(() => _onlineKitchen = v)),
       _tg(c, 'Auto print customer receipt (when auto-accepted)', _onlineReceipt, (v) => setState(() => _onlineReceipt = v)),

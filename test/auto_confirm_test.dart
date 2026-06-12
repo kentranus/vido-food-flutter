@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:vido_food_app/api.dart';
+import 'package:vido_food_app/pos/kiosk_setup.dart';
 import 'package:vido_food_app/pos/online_orders.dart';
 import 'package:vido_food_app/pos/settings_screen.dart';
 
@@ -73,6 +74,15 @@ void main() {
       await pump(tester, AutoConfirmTile(load: () async => throw Exception('net'),
           save: (_) async => {'ok': true}));
       expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    });
+  });
+
+  group('kioskAutoFlag acceptPrint — default ON, tắt được', () {
+    test('không set → true (in như cũ)', () {
+      expect(kioskAutoFlag({}, 'acceptPrint'), isTrue);
+    });
+    test('set false → tắt in khi Accept', () {
+      expect(kioskAutoFlag({'acceptPrint': false}, 'acceptPrint'), isFalse);
     });
   });
 }

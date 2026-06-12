@@ -27,3 +27,6 @@ void main() {
     expect(hoursLabel12('rác'), 'rác'); // không crash
   });
 }
+
+// acceptPrint flag — default ON (giữ hành vi cũ), tắt được.
+// (đặt chung file test settings cho gọn)

@@ -234,12 +234,17 @@ class OnlineOrdersController extends ChangeNotifier {
     } catch (e) { if (kDebugMode) print('print ticket failed: $e'); }
   }
 
-  /// Accept an ONLINE order: backend captures the card, then print + mark printed.
+  /// Accept an ONLINE order: backend captures the card, then print + mark
+  /// printed — printing is gated by the 'acceptPrint' toggle (Kiosk Setup,
+  /// default ON = original behavior). When OFF we also skip markPrinted so the
+  /// server flag stays for another device (e.g. Order Manager) to print.
   Future<({bool ok, String error})> accept(OnlineOrder o, int eta) async {
     final r = await Api.instance.accept(o.id, eta);
     if (r['ok'] != true) return (ok: false, error: (r['error'] ?? 'Confirm failed — card not charged.').toString());
-    await _printTicket(o, eta: eta);
-    try { await Api.instance.markPrinted(o.id); } catch (_) {}
+    if (_flag('acceptPrint')) {
+      await _printTicket(o, eta: eta);
+      try { await Api.instance.markPrinted(o.id); } catch (_) {}
+    }
     await refresh();
     return (ok: true, error: '');
   }
