@@ -102,6 +102,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+// Google-Business-style hours: times come from a 30-min dropdown instead of the
+// clock dial. Odd legacy values (e.g. 09:15 saved by the old picker) are kept
+// in the list so the dropdown never crashes on an unknown value.
+List<String> hoursTimeOptions(String current) {
+  final opts = <String>[
+    for (var h = 0; h < 24; h++)
+      for (var m = 0; m < 60; m += 30)
+        '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}',
+  ];
+  if (current.isNotEmpty && !opts.contains(current)) {
+    opts.add(current);
+    opts.sort();
+  }
+  return opts;
+}
+
+/// 'HH:mm' → '9:00 AM' (shared by the hours dropdowns).
+String hoursLabel12(String hhmm) {
+  final p = hhmm.split(':');
+  if (p.length < 2) return hhmm;
+  final h = int.tryParse(p[0]) ?? 0;
+  final ap = h < 12 ? 'AM' : 'PM';
+  final h12 = h % 12 == 0 ? 12 : h % 12;
+  return '$h12:${p[1]} $ap';
+}
+
 // shared form helpers --------------------------------------------------------
 Widget _h(PosColors c, String t) => Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -665,16 +691,6 @@ class _OrderingTabState extends State<_OrderingTab> {
     });
   }
 
-  Future<void> _pickTime(int dayIdx, bool isStart) async {
-    final cur = (isStart ? _hours[dayIdx].start : _hours[dayIdx].end).split(':');
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay(hour: int.tryParse(cur.isNotEmpty ? cur[0] : '9') ?? 9, minute: int.tryParse(cur.length > 1 ? cur[1] : '0') ?? 0),
-    );
-    if (picked == null) return;
-    final hhmm = '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-    setState(() { if (isStart) { _hours[dayIdx].start = hhmm; } else { _hours[dayIdx].end = hhmm; } });
-  }
 
   Future<void> _save() async {
     setState(() => _busy = true);
@@ -760,28 +776,37 @@ class _OrderingTabState extends State<_OrderingTab> {
       Switch(value: d.open, activeThumbColor: c.primary, onChanged: (v) => setState(() => d.open = v)),
       const SizedBox(width: 8),
       if (d.open) ...[
-        _timeChip(c, d.start, () => _pickTime(i, true)),
+        _timeDrop(c, d.start, (v) => setState(() => d.start = v)),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text('–', style: TextStyle(color: c.textMute, fontWeight: FontWeight.w900))),
-        _timeChip(c, d.end, () => _pickTime(i, false)),
+        _timeDrop(c, d.end, (v) => setState(() => d.end = v)),
+        IconButton(
+          tooltip: 'Apply these hours to all days',
+          icon: Icon(Icons.copy_all, size: 18, color: c.textMute),
+          onPressed: () => setState(() {
+            for (final x in _hours) { x.open = true; x.start = d.start; x.end = d.end; }
+          }),
+        ),
       ] else
         Text('Closed', style: TextStyle(color: c.textDim, fontWeight: FontWeight.w700, fontSize: 13)),
     ]));
   }
 
-  Widget _timeChip(PosColors c, String hhmm, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(8), border: Border.all(color: c.border)),
-          child: Text(_fmt12(hhmm), style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13)),
-        ),
-      );
-
-  static String _fmt12(String hhmm) {
-    final p = hhmm.split(':'); if (p.length < 2) return hhmm;
-    final h = int.tryParse(p[0]) ?? 0; final m = p[1];
-    final ap = h < 12 ? 'AM' : 'PM'; final h12 = h % 12 == 0 ? 12 : h % 12;
-    return '$h12:$m $ap';
+  // Dropdown 30-min steps (Google-Business style) — no more clock dial.
+  Widget _timeDrop(PosColors c, String value, ValueChanged<String> onChanged) {
+    final opts = hoursTimeOptions(value);
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(8), border: Border.all(color: c.border)),
+      child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+        value: opts.contains(value) ? value : opts.first,
+        dropdownColor: c.panel,
+        menuMaxHeight: 320,
+        style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13),
+        items: [for (final t in opts) DropdownMenuItem(value: t, child: Text(hoursLabel12(t)))],
+        onChanged: (v) { if (v != null) onChanged(v); },
+      )),
+    );
   }
 }
 
