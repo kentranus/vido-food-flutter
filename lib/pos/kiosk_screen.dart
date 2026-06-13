@@ -194,9 +194,10 @@ class _KioskScreenState extends State<KioskScreen> {
       final fallback = Container(
           decoration: BoxDecoration(gradient: gradientFor(p.name)),
           alignment: Alignment.center, child: Text(p.icon, style: const TextStyle(fontSize: 42)));
-      return AspectRatio(aspectRatio: 1, child: p.imageUrl.isEmpty
-          ? fallback
-          : Image.network(p.imageUrl, fit: BoxFit.cover, errorBuilder: (ctx, e, st) => fallback));
+      // real photo, else shared VIDO default placeholder (gradient only if offline)
+      final url = p.imageUrl.isNotEmpty ? p.imageUrl : kDefaultItemImage;
+      return AspectRatio(aspectRatio: 1,
+          child: Image.network(url, fit: BoxFit.cover, errorBuilder: (ctx, e, st) => fallback));
     }
     return GestureDetector(
       onTap: sold ? null : () => _select(p),

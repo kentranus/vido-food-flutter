@@ -1,5 +1,9 @@
 import 'api.dart';
 
+/// Default item image (VIDO placeholder) shown anywhere an item has no photo —
+/// online, POS, Kiosk. Single hosted WebP so it stays in sync everywhere.
+const String kDefaultItemImage = 'https://order.vidofood.com/brand/item-default.webp';
+
 class MenuCategory {
   final String id;
   final String name;

@@ -481,13 +481,14 @@ class _OrderViewState extends State<OrderView> {
   // Item image: synced 1:1 WebP photo (same imageUrl as kiosk + online); when
   // the item has no photo yet, fall back to the emoji-on-gradient tile.
   Widget _itemImage(PosColors c, MenuItem p) {
-    final url = p.imageUrl;
+    // Real photo if set, else the shared VIDO default placeholder; gradient+emoji
+    // only if even the default fails to load (offline).
+    final url = p.imageUrl.isNotEmpty ? p.imageUrl : kDefaultItemImage;
     final fallback = Container(
       decoration: BoxDecoration(gradient: gradientFor(p.name)),
       alignment: Alignment.center,
       child: Text(p.icon, style: const TextStyle(fontSize: 46)),
     );
-    if (url.isEmpty) return fallback;
     return Image.network(
       url, fit: BoxFit.cover, width: double.infinity, height: double.infinity,
       errorBuilder: (ctx, e, st) => fallback,
