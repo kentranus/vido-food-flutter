@@ -36,7 +36,7 @@ const PosColors kDark = PosColors(
   primaryD: Color(0xFFE0B000),
   primaryA: Color(0x2EFFCC00), // rgba(255,204,0,0.18)
   accent: Color(0xFFFFE066),
-  yellow: Color(0xFFFCD34D),
+  yellow: Color(0xFFFFCC00), // brand — đồng bộ #FFCC00 (chart dùng amber riêng)
   red: Color(0xFFEF4444),
   redA: Color(0x26EF4444), // rgba(239,68,68,0.15)
   blue: Color(0xFF3B82F6),

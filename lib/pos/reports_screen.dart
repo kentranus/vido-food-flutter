@@ -254,7 +254,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   // Sales by Category — horizontal bars sorted desc, palette colors.
   Widget _categoryBars(PosColors c, List<MapEntry<String, double>> entries) {
-    final palette = [c.primary, c.cyan, c.yellow, const Color(0xFFA855F7), const Color(0xFFEC4899), const Color(0xFFFB923C)];
+    final palette = [c.primary, c.cyan, const Color(0xFFFCD34D), const Color(0xFFA855F7), const Color(0xFFEC4899), const Color(0xFFFB923C)];
     final max = entries.first.value <= 0 ? 1 : entries.first.value;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       for (int i = 0; i < entries.length; i++)
@@ -282,7 +282,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             const SizedBox(height: 4),
             ClipRRect(borderRadius: BorderRadius.circular(3), child: Stack(children: [
               Container(height: 7, color: c.card),
-              FractionallySizedBox(widthFactor: (top[i].value / max).clamp(0.02, 1.0), child: Container(height: 7, color: i == 0 ? c.primary : i == 1 ? c.cyan : i == 2 ? c.yellow : c.border)),
+              FractionallySizedBox(widthFactor: (top[i].value / max).clamp(0.02, 1.0), child: Container(height: 7, color: i == 0 ? c.primary : i == 1 ? c.cyan : i == 2 ? const Color(0xFFFCD34D) : c.border)),
             ])),
           ])),
           const SizedBox(width: 10),
