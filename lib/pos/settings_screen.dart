@@ -522,19 +522,25 @@ class _ItemEditorState extends State<_ItemEditor> {
   late String _cat = widget.item?.category ?? (widget.categories.isNotEmpty ? widget.categories.first.id : '');
   late bool _available = widget.item?.available ?? true;
   late bool _is86 = widget.item?.is86d ?? false;
-  late String _imageUrl = widget.initialImageUrl;
+  late final String _imageUrl = widget.initialImageUrl;
   bool _uploading = false;
 
+  String _reviewMsg = '';
   Future<void> _photo() async {
     setState(() => _uploading = true);
     try {
-      final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1200, maxHeight: 1200, imageQuality: 80);
+      final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, maxHeight: 1600, imageQuality: 85);
       if (x != null) {
         final bytes = await x.readAsBytes();
         final mime = x.name.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
-        final r = await Api.instance.uploadMenuImage('data:image/$mime;base64,${base64Encode(bytes)}');
-        if (r['ok'] == true && r['url'] != null && mounted) {
-          setState(() => _imageUrl = '${r['url']}');
+        // Qua moderation — KHÔNG publish ngay; chờ VIDO duyệt.
+        final r = await Api.instance.uploadMenuImage('data:image/$mime;base64,${base64Encode(bytes)}', itemId: widget.item?.id ?? '');
+        if (r['ok'] == true && mounted) {
+          final st = '${r['status'] ?? 'needs_manual_review'}';
+          setState(() => _reviewMsg = st == 'approved'
+              ? 'Photo approved — appears shortly.'
+              : st == 'rejected' ? 'Photo rejected — try another image.'
+              : 'Photo submitted — Waiting for VIDO review.');
         } else if (mounted) {
           _toast(context, false, r['error']?.toString() ?? 'Upload failed');
         }
@@ -583,6 +589,8 @@ class _ItemEditorState extends State<_ItemEditor> {
             Expanded(child: PButton(Text(_uploading ? 'Uploading…' : (_imageUrl.isEmpty ? 'Add photo' : 'Change photo')),
                 variant: PBtnVariant.secondary, onPressed: _uploading ? null : _photo)),
           ]),
+          if (_reviewMsg.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8),
+              child: Text(_reviewMsg, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.textMute))),
           _toggle(c, 'Available (shown on menu)', _available, (v) => setState(() => _available = v)),
           _toggle(c, '86 — sold out today', _is86, (v) => setState(() => _is86 = v)),
           const SizedBox(height: 8),
