@@ -24,6 +24,8 @@ class MenuItem {
   final double price;
   final bool available, is86d, popular;
   final List<String> modifierGroupIds;
+  final String imageUrl;     // ảnh thật (hiện trên kiosk + online)
+  final String description;  // mô tả (hiện trên kiosk + online)
   MenuItem({
     required this.id,
     required this.name,
@@ -34,6 +36,8 @@ class MenuItem {
     required this.is86d,
     required this.popular,
     required this.modifierGroupIds,
+    this.imageUrl = '',
+    this.description = '',
   });
   bool get sellable => available && !is86d;
 }
@@ -69,6 +73,8 @@ class MenuRepo {
           is86d: i['is86d'] == true,
           popular: i['popular'] == true,
           modifierGroupIds: ((i['modifierGroupIds'] ?? []) as List).map((x) => x.toString()).toList(),
+          imageUrl: (i['imageUrl'] ?? '').toString(),
+          description: (i['description'] ?? '').toString(),
         );
       }).toList();
       groups = {

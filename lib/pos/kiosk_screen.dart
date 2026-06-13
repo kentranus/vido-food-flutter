@@ -153,10 +153,11 @@ class _KioskScreenState extends State<KioskScreen> {
         const BrandMark(size: 52, radius: 14),
       ])),
       Expanded(child: LayoutBuilder(builder: (context, box) {
-        final cols = box.maxWidth >= 900 ? 4 : box.maxWidth >= 600 ? 3 : 2;
+        final cols = box.maxWidth >= 900 ? 2 : 1; // card NGANG giống online
         return GridView.builder(
           padding: const EdgeInsets.all(16),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 0.85),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols, crossAxisSpacing: 14, mainAxisSpacing: 14, mainAxisExtent: 132),
           itemCount: _visible.length,
           itemBuilder: (_, i) => _tile(c, _visible[i]),
         );
@@ -164,34 +165,45 @@ class _KioskScreenState extends State<KioskScreen> {
     ]);
   }
 
+  // Card NGANG giống trang order online: info trái, ẢNH VUÔNG phải chạm 3 cạnh,
+  // bấm card → mở customize (Add nằm trong đó), KHÔNG nút +Add trên card.
   Widget _tile(PosColors c, MenuItem p) {
     final inCart = _order.items.any((i) => i.productId == p.id);
+    final sold = !p.sellable;
+    Widget photo() {
+      final fallback = Container(
+          decoration: BoxDecoration(gradient: gradientFor(p.name)),
+          alignment: Alignment.center, child: Text(p.icon, style: const TextStyle(fontSize: 42)));
+      return AspectRatio(aspectRatio: 1, child: p.imageUrl.isEmpty
+          ? fallback
+          : Image.network(p.imageUrl, fit: BoxFit.cover, errorBuilder: (ctx, e, st) => fallback));
+    }
     return GestureDetector(
-      onTap: () => _select(p),
-      child: Container(
-        decoration: BoxDecoration(color: c.panel, borderRadius: BorderRadius.circular(16), border: Border.all(color: c.border),
-            boxShadow: [BoxShadow(color: c.shadow, blurRadius: 16, offset: const Offset(0, 5))]),
+      onTap: sold ? null : () => _select(p),
+      child: Opacity(opacity: sold ? .5 : 1, child: Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .05), blurRadius: 10, offset: const Offset(0, 3))]),
         clipBehavior: Clip.antiAlias,
-        child: Stack(children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(child: Container(margin: const EdgeInsets.all(10),
-                decoration: BoxDecoration(gradient: gradientFor(p.name), borderRadius: BorderRadius.circular(12)),
-                alignment: Alignment.center, child: Text(p.icon, style: const TextStyle(fontSize: 56)))),
-            Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: c.text)),
-              const SizedBox(height: 8),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text(money(p.price), style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: c.text)),
-                Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                    decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(10), boxShadow: [BoxShadow(color: c.primaryD, offset: const Offset(0, 2))]),
-                    child: Text('+ Add', style: TextStyle(color: c.bg, fontWeight: FontWeight.w900, fontSize: 13))),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(18, 12, 12, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(child: Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17, color: Color(0xFF14181F)))),
+                if (p.popular) Padding(padding: const EdgeInsets.only(left: 6), child: _badge('HOT', const Color(0xFFFB7185), Colors.white)),
+                if (inCart) Padding(padding: const EdgeInsets.only(left: 6), child: _badge('Added', const Color(0xFF16A34A), Colors.white)),
               ]),
-            ])),
-          ]),
-          if (p.popular) Positioned(top: 8, left: 8, child: _badge('HOT', const Color(0xFFFB7185), Colors.white)),
-          if (inCart) Positioned(top: 8, right: 8, child: _badge('Added', c.cyan, c.bg)),
+              if (p.description.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 5),
+                  child: Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280), height: 1.45))),
+              const Spacer(),
+              Text(sold ? 'Sold out' : money(p.price),
+                  style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: sold ? const Color(0xFFDC2626) : const Color(0xFF14181F))),
+            ]))),
+          photo(), // ảnh vuông sát phải, góc phải bo theo card (clip), cạnh trái thẳng
         ]),
-      ),
+      )),
     );
   }
 
