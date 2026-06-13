@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../api.dart';
 import '../menu.dart' hide CartLine;
+import '../menu_sync.dart';
 import '../pax.dart';
 import '../screens/pin_lock.dart';
 import '../ui/pos_theme.dart';
@@ -30,9 +31,21 @@ class _KioskScreenState extends State<KioskScreen> {
   Order? _done;
   int _tapCount = 0;
   DateTime _tapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  late final MenuSyncListener _menuSync;
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+    // Live sync: refresh the kiosk menu the moment it changes anywhere.
+    _menuSync = MenuSyncListener(_reloadMenu)..start();
+  }
+
+  @override
+  void dispose() {
+    _menuSync.stop();
+    super.dispose();
+  }
 
   Future<void> _load() async {
     await OrderCounter.init();
@@ -41,6 +54,14 @@ class _KioskScreenState extends State<KioskScreen> {
     if (repo.taxRate > 0) ShopConfig.tax = repo.taxRate;
     if (!mounted) return;
     setState(() { _order = emptyOrder()..type = 'togo'; _loading = false; });
+  }
+
+  // Live menu reload (keeps offline-default fallback) — repaints in place.
+  Future<void> _reloadMenu() async {
+    await repo.load();
+    if (repo.items.isEmpty) { repo.categories = List.of(kDefaultCategories); repo.items = List.of(kDefaultMenu); }
+    if (repo.taxRate > 0) ShopConfig.tax = repo.taxRate;
+    if (mounted) setState(() {});
   }
 
   void _secretTap() {
@@ -99,46 +120,45 @@ class _KioskScreenState extends State<KioskScreen> {
     if (_loading) return Scaffold(backgroundColor: c.bg, body: Center(child: CircularProgressIndicator(color: c.primary)));
     if (_done != null) return _doneScreen(c);
     final portrait = MediaQuery.of(context).size.height >= MediaQuery.of(context).size.width;
+    // Category bar is a HORIZONTAL top bar in BOTH orientations (like the online
+    // order page). Cart stays at the bottom (portrait) or right (landscape).
     return Scaffold(backgroundColor: c.bg, body: SafeArea(child: Stack(children: [
-      portrait
-          ? Column(children: [_catBar(c, portrait), Expanded(child: _menuArea(c)), _cart(c, portrait)])
-          : Row(children: [_catBar(c, portrait), Expanded(child: _menuArea(c)), _cart(c, portrait)]),
+      Column(children: [
+        _catBar(c),
+        Expanded(child: portrait
+            ? Column(children: [Expanded(child: _menuArea(c)), _cart(c, portrait)])
+            : Row(children: [Expanded(child: _menuArea(c)), _cart(c, portrait)])),
+      ]),
       // hidden admin hotspot (top-left)
       Positioned(top: 0, left: 0, child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _secretTap,
           child: const SizedBox(width: 64, height: 64))),
     ])));
   }
 
-  Widget _catBar(PosColors c, bool portrait) {
+  Widget _catBar(PosColors c) {
     final cats = [const MenuCategory('all', 'All', '🍱'), ...repo.categories.where((x) => x.id != 'topping')];
-    final children = [for (final cat in cats) _catBtn(c, cat, portrait)];
     return Container(
-      width: portrait ? null : 150,
-      decoration: BoxDecoration(color: c.panel, border: Border(
-          right: portrait ? BorderSide.none : BorderSide(color: c.border),
-          bottom: portrait ? BorderSide(color: c.border) : BorderSide.none)),
-      child: portrait
-          ? SizedBox(height: 92, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.all(12), children: children))
-          : ListView(padding: const EdgeInsets.all(12), children: children),
+      decoration: BoxDecoration(color: c.panel, border: Border(bottom: BorderSide(color: c.border))),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(children: [for (final cat in cats) _catBtn(c, cat)]),
+      ),
     );
   }
 
-  Widget _catBtn(PosColors c, MenuCategory cat, bool portrait) {
+  Widget _catBtn(PosColors c, MenuCategory cat) {
     final active = _activeCat == cat.id;
     return GestureDetector(
       onTap: () => setState(() => _activeCat = cat.id),
       child: Container(
-        width: portrait ? 84 : double.infinity,
-        margin: portrait ? const EdgeInsets.only(right: 10) : const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
-        decoration: BoxDecoration(color: active ? c.primary : c.card, borderRadius: BorderRadius.circular(16),
+        margin: const EdgeInsets.only(right: 10),
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 18),
+        decoration: BoxDecoration(color: active ? c.primary : c.card, borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: active ? c.primary : c.border),
             boxShadow: active ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 3))] : null),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text(cat.icon, style: const TextStyle(fontSize: 26)),
-          const SizedBox(height: 4),
-          Text(cat.name, textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: active ? c.bg : c.text)),
-        ]),
+        child: Text(cat.name, // text only — no emoji icon
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: active ? c.bg : c.text)),
       ),
     );
   }

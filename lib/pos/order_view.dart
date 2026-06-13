@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../hardware.dart';
 import '../menu.dart' hide CartLine;
+import '../menu_sync.dart';
 import '../pax.dart';
 import '../printer.dart';
 import '../services/staff_store.dart';
@@ -31,11 +32,31 @@ class _OrderViewState extends State<OrderView> {
   String? _activeId;
   String _activeCat = 'all';
   String _search = '';
+  late final MenuSyncListener _menuSync;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // Live sync: reload the menu when it changes anywhere (edit / 86 / photo
+    // approved) so POS stays in step with online, Kiosk and Manager.
+    _menuSync = MenuSyncListener(_reloadMenu)..start();
+  }
+
+  @override
+  void dispose() {
+    _menuSync.stop();
+    super.dispose();
+  }
+
+  // Re-fetch just the menu (keeps the offline-default fallback) and repaint.
+  Future<void> _reloadMenu() async {
+    await repo.load();
+    if (repo.items.isEmpty) {
+      repo.categories = List.of(kDefaultCategories);
+      repo.items = List.of(kDefaultMenu);
+    }
+    if (mounted) setState(() {});
   }
 
   // Hardware config (cash drawer) loaded from settings.
@@ -332,11 +353,9 @@ class _OrderViewState extends State<OrderView> {
           ),
         ]),
       ),
-      // inner row: category rail + product grid
-      Expanded(child: Row(children: [
-        _catRail(c),
-        Expanded(child: _grid(c)),
-      ])),
+      // category bar (horizontal, top) + product grid — matches online order page
+      _catBarH(c),
+      Expanded(child: _grid(c)),
     ]);
   }
 
@@ -355,35 +374,36 @@ class _OrderViewState extends State<OrderView> {
     );
   }
 
-  Widget _catRail(PosColors c) {
+  // Horizontal category bar on top (text-only pills, no icon) — like the
+  // online order page. Replaces the old vertical sidebar (_catRail).
+  Widget _catBarH(PosColors c) {
     final cats = [const MenuCategory('all', 'All', '🍱'), ...repo.categories.where((x) => x.id != 'topping')];
     return Container(
-      width: 118,
-      decoration: BoxDecoration(color: c.panel, border: Border(right: BorderSide(color: c.border))),
-      child: ListView(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14), children: [
-        for (final cat in cats) _catBtn(c, cat),
-      ]),
+      decoration: BoxDecoration(color: c.panel, border: Border(bottom: BorderSide(color: c.border))),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final cat in cats) _catChip(c, cat),
+        ]),
+      ),
     );
   }
 
-  Widget _catBtn(PosColors c, MenuCategory cat) {
+  Widget _catChip(PosColors c, MenuCategory cat) {
     final active = _activeCat == cat.id;
     return GestureDetector(
       onTap: () => setState(() => _activeCat = cat.id),
       child: Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 13),
+        margin: const EdgeInsets.only(right: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 10),
         decoration: BoxDecoration(
-          color: active ? c.primary : Colors.transparent, borderRadius: BorderRadius.circular(14),
+          color: active ? c.primary : c.card, borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: active ? c.primary : c.border),
           boxShadow: active ? [BoxShadow(color: c.primaryD, offset: const Offset(0, 3))] : null,
         ),
-        child: Column(children: [
-          Text(cat.icon, style: const TextStyle(fontSize: 22)),
-          const SizedBox(height: 6),
-          Text(cat.name, textAlign: TextAlign.center, maxLines: 2,
-              style: TextStyle(fontSize: 13, height: 1.2, fontWeight: FontWeight.w900, color: active ? c.bg : c.textMute)),
-        ]),
+        child: Text(cat.name, // text only — no emoji icon
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: active ? c.bg : c.textMute)),
       ),
     );
   }
@@ -423,10 +443,9 @@ class _OrderViewState extends State<OrderView> {
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Expanded(child: Padding(
                 padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-                child: Container(
-                  decoration: BoxDecoration(gradient: gradientFor(p.name), borderRadius: BorderRadius.circular(10)),
-                  alignment: Alignment.center,
-                  child: Text(p.icon, style: const TextStyle(fontSize: 46)),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10), // bo góc như hiện tại
+                  child: _itemImage(c, p),
                 ),
               )),
               Padding(
@@ -456,6 +475,25 @@ class _OrderViewState extends State<OrderView> {
           ]),
         ),
       ),
+    );
+  }
+
+  // Item image: synced 1:1 WebP photo (same imageUrl as kiosk + online); when
+  // the item has no photo yet, fall back to the emoji-on-gradient tile.
+  Widget _itemImage(PosColors c, MenuItem p) {
+    final url = p.imageUrl;
+    final fallback = Container(
+      decoration: BoxDecoration(gradient: gradientFor(p.name)),
+      alignment: Alignment.center,
+      child: Text(p.icon, style: const TextStyle(fontSize: 46)),
+    );
+    if (url.isEmpty) return fallback;
+    return Image.network(
+      url, fit: BoxFit.cover, width: double.infinity, height: double.infinity,
+      errorBuilder: (ctx, e, st) => fallback,
+      loadingBuilder: (ctx, child, prog) =>
+          prog == null ? child : Container(color: c.card, child: const Center(
+              child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)))),
     );
   }
 
