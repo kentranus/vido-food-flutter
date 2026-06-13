@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:vido_food_app/api.dart';
 import 'package:vido_food_app/pos/kiosk_setup.dart';
+import 'package:vido_food_app/pos/order_models.dart';
 import 'package:vido_food_app/pos/online_orders.dart';
 import 'package:vido_food_app/pos/settings_screen.dart';
 
@@ -93,6 +94,17 @@ void main() {
       expect(canDeleteCategory([{'category': 'a'}], 'a'), isFalse);
       expect(canDeleteCategory([{'category': 'a'}], 'b'), isTrue);
       expect(slugifyName('Phở Đặc Biệt'), 'pho-dac-biet');
+    });
+  });
+
+  group('Order.officialNumber — số server thống nhất, fallback local', () {
+    test('chưa có serverNumber → dùng số tab local', () {
+      final o = Order(id: 'o1', number: 1001, createdAt: '2026-06-13T00:00:00Z');
+      expect(o.officialNumber, '1001');
+    });
+    test('có serverNumber → dùng số chung server', () {
+      final o = Order(id: 'o1', number: 1001, createdAt: '2026-06-13T00:00:00Z')..serverNumber = '003';
+      expect(o.officialNumber, '003');
     });
   });
 }

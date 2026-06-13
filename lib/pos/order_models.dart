@@ -72,6 +72,12 @@ class Order {
 
   // ---- Gift card tender áp vào đơn (POS D4) ----
   // giftCode FULL chỉ giữ trong RAM để refund khi remove/fail — không in/log.
+  /// Số đơn CHÍNH THỨC từ server (chuỗi chung POS+Kiosk+Online, vd '003').
+  /// Gán sau khi createOrder thành công; offline thì null → dùng số tab local.
+  String? serverNumber;
+  /// Số hiển thị/in: ưu tiên số server thống nhất, fallback số tab local.
+  String get officialNumber => serverNumber ?? '$number';
+
   String? giftCode;
   String? giftCodeMasked;
   double giftApplied = 0;

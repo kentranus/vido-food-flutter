@@ -168,6 +168,7 @@ class _OrderViewState extends State<OrderView> {
       final saved = await Api.instance.createOrder(orderToApi(o,
           paymentMethod: pay['method']?.toString(), tip: tip,
           giftCode: o.giftCodeMasked, giftApplied: o.giftApplied));
+      if (saved['ok'] == true) { o.serverNumber = saved['order']?['number']?.toString(); }
       if (saved['ok'] != true) {
         await Api.instance.giftRefund(o.giftCode!, o.giftRef!);
         if (!mounted) return;
@@ -178,11 +179,13 @@ class _OrderViewState extends State<OrderView> {
         return; // đơn vẫn mở, không in bill, không xoá khỏi danh sách
       }
     } else {
-      Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
+      // await để lấy số đơn CHUNG từ server (online); offline → trả nhanh, dùng số local.
+      final saved = await Api.instance.createOrder(orderToApi(o, paymentMethod: pay['method']?.toString(), tip: tip));
+      if (saved['ok'] == true) o.serverNumber = saved['order']?['number']?.toString();
     }
     try {
       await printKitchenTicket(
-        source: 'POS', number: '${o.number}', type: orderTypeOf(o.type).label,
+        source: 'POS', number: o.officialNumber, type: orderTypeOf(o.type).label,
         items: o.items.map((l) => {
           'qty': l.qty, 'name': l.name,
           'mods': [if (!l.isSimple) '${l.size == 'L' ? 'Large' : 'Reg'} · ${l.sugar}% sugar · ${l.ice}% ice', ...l.toppings.map((t) => t.name)],
@@ -1238,7 +1241,7 @@ class _ReceiptDialog extends StatelessWidget {
       const SizedBox(height: 12),
       Center(child: Text('Sale Complete!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: c.text))),
       Center(child: Padding(padding: const EdgeInsets.only(top: 4),
-          child: Text('Order #${order.number}', style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w700)))),
+          child: Text('Order #${order.officialNumber}', style: TextStyle(fontSize: 12, color: c.textMute, fontWeight: FontWeight.w700)))),
       const SizedBox(height: 14),
       Container(
         padding: const EdgeInsets.all(14),
@@ -1272,7 +1275,7 @@ class _ReceiptDialog extends StatelessWidget {
       Row(children: [
         Expanded(child: PButton(const Text('🖨️ Print'), variant: PBtnVariant.ghost, expand: true, onPressed: () async {
           try {
-            await printReceipt(storeName: storeName.isEmpty ? 'Vido Food' : storeName, number: '${order.number}',
+            await printReceipt(storeName: storeName.isEmpty ? 'Vido Food' : storeName, number: order.officialNumber,
               type: orderTypeOf(order.type).label,
               items: order.items.map((l) => {'qty': l.qty, 'name': l.name, 'lineTotal': l.lineTotal}).toList(),
               subtotal: t.sub, tax: t.tax, tip: tip, total: grand,
