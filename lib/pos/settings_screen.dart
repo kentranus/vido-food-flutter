@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../api.dart';
 import '../hardware.dart';
 import '../menu.dart' hide CartLine;
@@ -126,6 +129,35 @@ String hoursLabel12(String hhmm) {
   final ap = h < 12 ? 'AM' : 'PM';
   final h12 = h % 12 == 0 ? 12 : h % 12;
   return '$h12:${p[1]} $ap';
+}
+
+// Menu category helpers (LOCAL COPY of the OM versions — keep in sync per
+// docs/SHARED_LOGIC.md until POS can consume vido_food_core).
+List<Map<String, dynamic>> reorderCategory(List<Map<String, dynamic>> cats, int index, int delta) {
+  final next = [...cats];
+  final j = index + delta;
+  if (index < 0 || index >= next.length || j < 0 || j >= next.length) return next;
+  final tmp = next[index];
+  next[index] = next[j];
+  next[j] = tmp;
+  for (var i = 0; i < next.length; i++) {
+    next[i] = {...next[i], 'order': i + 1};
+  }
+  return next;
+}
+
+bool canDeleteCategory(List<Map<String, dynamic>> items, String catId) =>
+    !items.any((it) => '${it['category']}' == catId);
+
+String slugifyName(String name) {
+  const map = 'àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ';
+  const rep = 'aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd';
+  var s = name.toLowerCase();
+  for (var i = 0; i < map.length; i++) {
+    s = s.replaceAll(map[i], rep[i]);
+  }
+  s = s.replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  return s.isEmpty ? 'item' : s;
 }
 
 // shared form helpers --------------------------------------------------------
@@ -405,12 +437,25 @@ class _MenuTabState extends State<_MenuTab> {
   }
 
   Future<void> _edit([MenuItem? it]) async {
+    final rawIt = it == null ? null : repo.rawItems.where((e) => '${e['id']}' == it.id).firstOrNull;
     final res = await showDialog<Map<String, dynamic>>(context: context, barrierColor: PT.c.overlay,
-        builder: (_) => _ItemEditor(item: it, categories: repo.categories));
+        builder: (_) => _ItemEditor(item: it, categories: repo.categories,
+            initialDescription: '${rawIt?['description'] ?? ''}', initialImageUrl: '${rawIt?['imageUrl'] ?? ''}'));
     if (res == null) return;
     setState(() => _saving = true);
     final ok = await repo.upsertItem(res);
     if (mounted) { setState(() => _saving = false); _toast(context, ok, ok ? 'Saved' : 'Save failed'); if (ok) await _load(); }
+  }
+
+  Future<void> _manageCategories() async {
+    var cats = repo.rawCategories;
+    final items = repo.rawItems;
+    final changed = await showDialog<List<Map<String, dynamic>>>(context: context, barrierColor: PT.c.overlay,
+        builder: (dctx) => _CategoryManagerDialog(categories: cats, items: items));
+    if (changed == null) return;
+    setState(() => _saving = true);
+    final ok = await repo.saveCategories(changed);
+    if (mounted) { setState(() => _saving = false); _toast(context, ok, ok ? 'Categories saved' : 'Save failed'); if (ok) await _load(); }
   }
 
   Future<void> _delete(MenuItem it) async {
@@ -429,7 +474,11 @@ class _MenuTabState extends State<_MenuTab> {
       ListView(padding: const EdgeInsets.all(24), children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           _h(c, 'Menu Items'),
-          PButton(const Text('+ Add item'), onPressed: () => _edit()),
+          Row(children: [
+            PButton(const Text('Categories'), variant: PBtnVariant.secondary, onPressed: _manageCategories),
+            const SizedBox(width: 8),
+            PButton(const Text('+ Add item'), onPressed: () => _edit()),
+          ]),
         ]),
         for (final cat in repo.categories) ...[
           _section(c, cat.name),
@@ -458,7 +507,9 @@ class _MenuTabState extends State<_MenuTab> {
 class _ItemEditor extends StatefulWidget {
   final MenuItem? item;
   final List<MenuCategory> categories;
-  const _ItemEditor({required this.item, required this.categories});
+  final String initialDescription;
+  final String initialImageUrl;
+  const _ItemEditor({required this.item, required this.categories, this.initialDescription = '', this.initialImageUrl = ''});
   @override
   State<_ItemEditor> createState() => _ItemEditorState();
 }
@@ -467,9 +518,32 @@ class _ItemEditorState extends State<_ItemEditor> {
   late final _name = TextEditingController(text: widget.item?.name ?? '');
   late final _price = TextEditingController(text: widget.item?.price.toStringAsFixed(2) ?? '');
   late final _icon = TextEditingController(text: widget.item?.icon ?? '🧋');
+  late final _desc = TextEditingController(text: widget.initialDescription);
   late String _cat = widget.item?.category ?? (widget.categories.isNotEmpty ? widget.categories.first.id : '');
   late bool _available = widget.item?.available ?? true;
   late bool _is86 = widget.item?.is86d ?? false;
+  late String _imageUrl = widget.initialImageUrl;
+  bool _uploading = false;
+
+  Future<void> _photo() async {
+    setState(() => _uploading = true);
+    try {
+      final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1200, maxHeight: 1200, imageQuality: 80);
+      if (x != null) {
+        final bytes = await x.readAsBytes();
+        final mime = x.name.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+        final r = await Api.instance.uploadMenuImage('data:image/$mime;base64,${base64Encode(bytes)}');
+        if (r['ok'] == true && r['url'] != null && mounted) {
+          setState(() => _imageUrl = '${r['url']}');
+        } else if (mounted) {
+          _toast(context, false, r['error']?.toString() ?? 'Upload failed');
+        }
+      }
+    } catch (e) {
+      if (mounted) _toast(context, false, 'Photo upload failed');
+    }
+    if (mounted) setState(() => _uploading = false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -495,6 +569,20 @@ class _ItemEditorState extends State<_ItemEditor> {
             const SizedBox(width: 10),
             Expanded(child: _dropdown(c, _cat, {for (final cat in widget.categories) cat.id: cat.name}, (v) => setState(() => _cat = v))),
           ]),
+          const SizedBox(height: 10),
+          PInput(controller: _desc, hintText: 'Description (shown to customers)'),
+          const SizedBox(height: 10),
+          Row(children: [
+            ClipRRect(borderRadius: BorderRadius.circular(10), child: _imageUrl.isNotEmpty
+                ? Image.network(_imageUrl, width: 54, height: 54, fit: BoxFit.cover,
+                    errorBuilder: (x, e, st) => Container(width: 54, height: 54, color: c.card, child: Icon(Icons.broken_image, color: c.textMute, size: 20)))
+                : Container(width: 54, height: 54, alignment: Alignment.center,
+                    decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.border)),
+                    child: Icon(Icons.add_a_photo_outlined, color: c.textMute, size: 20))),
+            const SizedBox(width: 10),
+            Expanded(child: PButton(Text(_uploading ? 'Uploading…' : (_imageUrl.isEmpty ? 'Add photo' : 'Change photo')),
+                variant: PBtnVariant.secondary, onPressed: _uploading ? null : _photo)),
+          ]),
           _toggle(c, 'Available (shown on menu)', _available, (v) => setState(() => _available = v)),
           _toggle(c, '86 — sold out today', _is86, (v) => setState(() => _is86 = v)),
           const SizedBox(height: 8),
@@ -503,7 +591,8 @@ class _ItemEditorState extends State<_ItemEditor> {
             if (name.isEmpty) return;
             final id = widget.item?.id ?? name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
             Navigator.of(context).pop({'id': id, 'name': name, 'icon': _icon.text.trim().isEmpty ? '🧋' : _icon.text.trim(),
-              'price': double.tryParse(_price.text) ?? 0, 'category': _cat, 'available': _available, 'is86d': _is86});
+              'price': double.tryParse(_price.text) ?? 0, 'category': _cat, 'available': _available, 'is86d': _is86,
+              'description': _desc.text.trim(), 'imageUrl': _imageUrl});
           }),
         ]),
       ),
@@ -938,4 +1027,92 @@ Widget _confirm(BuildContext context, String msg) {
       TextButton(onPressed: () => Navigator.pop(context, true), child: Text('OK', style: TextStyle(color: c.red, fontWeight: FontWeight.w900))),
     ],
   );
+}
+
+/// Quản lý category (POS): thêm / đổi tên / xoá (khi rỗng) / sắp thứ tự.
+/// Trả về danh sách mới khi bấm Save (null = huỷ).
+class _CategoryManagerDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> categories;
+  final List<Map<String, dynamic>> items;
+  const _CategoryManagerDialog({required this.categories, required this.items});
+  @override
+  State<_CategoryManagerDialog> createState() => _CategoryManagerDialogState();
+}
+
+class _CategoryManagerDialogState extends State<_CategoryManagerDialog> {
+  late List<Map<String, dynamic>> _cats = [...widget.categories];
+
+  Future<String?> _nameDialog(String title, [String initial = '']) {
+    final ctl = TextEditingController(text: initial);
+    return showDialog<String>(context: context, builder: (d) => AlertDialog(
+          title: Text(title),
+          content: TextField(controller: ctl, autofocus: true,
+              decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder())),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(d, ctl.text), child: const Text('OK')),
+          ],
+        ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = PT.c;
+    return Dialog(
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 480),
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(color: c.panel, borderRadius: BorderRadius.circular(18)),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('Categories', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: c.text)),
+          const SizedBox(height: 4),
+          Text('Order here = order on the kiosk & online order page. A category can be deleted only when empty.',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textMute)),
+          const SizedBox(height: 10),
+          ConstrainedBox(constraints: const BoxConstraints(maxHeight: 360), child: ListView(shrinkWrap: true, children: [
+            for (var i = 0; i < _cats.length; i++) Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: c.border)),
+              child: Row(children: [
+                Text('${_cats[i]['icon'] ?? '🍽'} ', style: const TextStyle(fontSize: 18)),
+                Expanded(child: Text('${_cats[i]['name']}', style: TextStyle(fontWeight: FontWeight.w800, color: c.text, fontSize: 13.5))),
+                Text('${widget.items.where((it) => '${it['category']}' == '${_cats[i]['id']}').length}',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.textMute)),
+                IconButton(icon: const Icon(Icons.keyboard_arrow_up, size: 19),
+                    color: c.textMute,
+                    onPressed: i == 0 ? null : () => setState(() => _cats = reorderCategory(_cats, i, -1))),
+                IconButton(icon: const Icon(Icons.keyboard_arrow_down, size: 19),
+                    color: c.textMute,
+                    onPressed: i == _cats.length - 1 ? null : () => setState(() => _cats = reorderCategory(_cats, i, 1))),
+                IconButton(icon: const Icon(Icons.edit, size: 18), color: c.textMute, onPressed: () async {
+                  final r = await _nameDialog('Rename category', '${_cats[i]['name']}');
+                  if (r != null && r.trim().isNotEmpty) setState(() => _cats[i] = {..._cats[i], 'name': r.trim()});
+                }),
+                IconButton(icon: const Icon(Icons.delete_outline, size: 18),
+                    color: canDeleteCategory(widget.items, '${_cats[i]['id']}') ? c.red : c.border,
+                    onPressed: !canDeleteCategory(widget.items, '${_cats[i]['id']}') ? null
+                        : () => setState(() => _cats = [..._cats]..removeAt(i))),
+              ]),
+            ),
+          ])),
+          const SizedBox(height: 6),
+          PButton(const Text('+ Add category'), variant: PBtnVariant.secondary, onPressed: () async {
+            final r = await _nameDialog('Add category');
+            if (r == null || r.trim().isEmpty) return;
+            var id = slugifyName(r);
+            var n = 2;
+            while (_cats.any((x) => '${x['id']}' == id)) { id = '${slugifyName(r)}-$n'; n++; }
+            setState(() => _cats = [..._cats, {'id': id, 'name': r.trim(), 'icon': '🍽', 'order': _cats.length + 1}]);
+          }),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: PButton(const Text('Cancel'), variant: PBtnVariant.ghost, onPressed: () => Navigator.pop(context))),
+            const SizedBox(width: 8),
+            Expanded(child: PButton(const Text('Save'), onPressed: () => Navigator.pop(context, _cats))),
+          ]),
+        ]),
+      ),
+    );
+  }
 }

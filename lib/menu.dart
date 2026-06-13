@@ -114,6 +114,15 @@ class MenuRepo {
     return _saveAndReload();
   }
 
+  List<Map<String, dynamic>> get rawCategories =>
+      List<Map<String, dynamic>>.from(((raw['categories'] ?? []) as List).map((e) => Map<String, dynamic>.from(e)));
+
+  /// Replace categories (add/rename/delete/reorder) and persist losslessly.
+  Future<bool> saveCategories(List<Map<String, dynamic>> cats) async {
+    raw['categories'] = cats;
+    return _saveAndReload();
+  }
+
   Future<bool> deleteItem(String id) async {
     final list = (raw['items'] ?? []) as List;
     list.removeWhere((e) => (e['id'] ?? '').toString() == id);

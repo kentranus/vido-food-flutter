@@ -85,4 +85,14 @@ void main() {
       expect(kioskAutoFlag({'acceptPrint': false}, 'acceptPrint'), isFalse);
     });
   });
+
+  group('category helpers (sync với OM — SHARED_LOGIC.md)', () {
+    test('reorder + canDelete + slugify tiếng Việt', () {
+      final cats = [{'id': 'a', 'order': 1}, {'id': 'b', 'order': 2}];
+      expect(reorderCategory(cats, 1, -1).map((c) => c['id']).toList(), ['b', 'a']);
+      expect(canDeleteCategory([{'category': 'a'}], 'a'), isFalse);
+      expect(canDeleteCategory([{'category': 'a'}], 'b'), isTrue);
+      expect(slugifyName('Phở Đặc Biệt'), 'pho-dac-biet');
+    });
+  });
 }
