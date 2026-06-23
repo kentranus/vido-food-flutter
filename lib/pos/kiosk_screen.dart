@@ -398,7 +398,7 @@ class _KioskPaymentState extends State<_KioskPayment> {
                     Text(money(t.total + _tipAmount), style: TextStyle(fontWeight: FontWeight.w900, color: c.text)),
                   ])),
               const SizedBox(height: 12),
-              PButton(const Text('Send to Terminal'), size: PBtnSize.lg, expand: true, onPressed: _send),
+              PButton(const Text('Pay Now'), size: PBtnSize.lg, expand: true, onPressed: _send),
             ],
             if (_started && !approved) ...[
               if (_busy) Container(margin: const EdgeInsets.only(top: 8), padding: const EdgeInsets.all(24), alignment: Alignment.center,

@@ -945,7 +945,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         Row(children: [
           _payCard(c, Icons.attach_money, 'Cash', false, () => setState(() => _method = 'cash')),
           const SizedBox(width: 10),
-          _payCard(c, Icons.credit_card, 'Card Payment', true, () => setState(() => _method = 'card')),
+          _payCard(c, Icons.credit_card, 'Card', true, () => setState(() => _method = 'card')),
           const SizedBox(width: 10),
           // 1 thẻ / đơn trong D4 — thẻ đã áp thì nút mờ (Remove rồi mới đổi thẻ khác).
           hasGift
