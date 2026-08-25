@@ -366,7 +366,9 @@ class _KioskPaymentState extends State<_KioskPayment> {
   Widget build(BuildContext context) {
     final c = PT.c;
     final t = widget.order.totals;
-    final approved = _result?.approved == true;
+    // Simulated (no terminal configured) must not count as a real paid sale.
+    final simulated = _result?.simulated == true;
+    final approved = _result?.approved == true && !simulated;
     return Dialog(backgroundColor: Colors.transparent, insetPadding: const EdgeInsets.all(20),
       child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 560),
         child: Container(padding: const EdgeInsets.all(26),
@@ -411,12 +413,14 @@ class _KioskPaymentState extends State<_KioskPayment> {
                   ])),
               if (!_busy && _result != null) ...[
                 Container(margin: const EdgeInsets.only(top: 12), padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: c.redA, borderRadius: BorderRadius.circular(12)),
-                    child: Text('Declined: ${_result!.message}', style: TextStyle(color: c.red, fontWeight: FontWeight.w800))),
+                    child: Text(simulated
+                        ? 'Card terminal not set up on this device — cannot charge cards. Set it up in Settings.'
+                        : 'Declined: ${_result!.message}', style: TextStyle(color: c.red, fontWeight: FontWeight.w800))),
                 const SizedBox(height: 10),
                 Row(children: [
                   Expanded(child: PButton(const Text('Back'), variant: PBtnVariant.ghost, expand: true, onPressed: () => setState(() { _started = false; _result = null; }))),
-                  const SizedBox(width: 10),
-                  Expanded(child: PButton(const Text('Try Again'), expand: true, onPressed: _send)),
+                  if (!simulated) const SizedBox(width: 10),
+                  if (!simulated) Expanded(child: PButton(const Text('Try Again'), expand: true, onPressed: _send)),
                 ]),
               ],
             ],

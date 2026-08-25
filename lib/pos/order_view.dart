@@ -1160,20 +1160,25 @@ class _PaxFlowState extends State<_PaxFlow> {
   Widget build(BuildContext context) {
     final c = PT.c;
     final t = widget.order.totals;
-    final approved = _result?.approved == true;
+    // A simulated approval (no card terminal configured) must NEVER count as a real
+    // paid sale — otherwise staff could record a "paid" card order that charged nothing.
+    final simulated = _result?.simulated == true;
+    final approved = _result?.approved == true && !simulated;
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _backBtn(c, widget.onBack, enabled: !_busy),
       Padding(padding: const EdgeInsets.only(top: 10),
           child: Text('Card Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c.text))),
       Padding(padding: const EdgeInsets.only(top: 4),
           child: Text((widget.mode == 'tcp' && widget.host.isEmpty)
-                  ? 'No terminal — simulated card payment'
+                  ? 'No card terminal configured'
                   : 'Customer is using the card terminal (${widget.mode.toUpperCase()})',
               style: TextStyle(fontSize: 13, color: c.textMute, fontWeight: FontWeight.w700))),
       _payTotalBox(c, 'Amount due', t.total),
       if (_busy) _statusCard(c, '💳', 'Waiting for card', 'Customer: insert, tap, or swipe', animated: true),
       if (!_busy && approved) _verifyTicket(c),
-      if (!_busy && _result != null && !approved) _declineBox(c, 'Declined', _result!.message),
+      if (!_busy && simulated) _declineBox(c, 'Card terminal not set up',
+          'This device has no card terminal configured, so it cannot charge cards. Set it up in Settings, or take Cash / Gift Card instead.'),
+      if (!_busy && _result != null && !approved && !simulated) _declineBox(c, 'Declined', _result!.message),
       if (!_busy && _error != null) _declineBox(c, 'Error', _error!),
       const SizedBox(height: 12),
       if (_busy) PButton(const Text('Cancel'), variant: PBtnVariant.ghost, expand: true, onPressed: widget.onBack)
@@ -1185,6 +1190,7 @@ class _PaxFlowState extends State<_PaxFlow> {
           'cardLast4': _result!.cardLast4, 'cardType': _result!.cardType, 'authCode': _result!.authCode,
         }))),
       ])
+      else if (simulated) PButton(const Text('Back'), variant: PBtnVariant.ghost, expand: true, onPressed: widget.onBack)
       else PButton(const Text('Try Again'), expand: true, onPressed: _run),
     ]);
   }
